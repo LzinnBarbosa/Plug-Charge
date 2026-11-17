@@ -71,7 +71,14 @@
             <div class="metric"><span class="label">Nível de Carga:</span><span id="bat-perc" class="value">15%</span></div>
             <div class="battery-container"><div id="battery-level"></div></div>
         </div>
-        <div id="main-status">Aguardando Aproximação</div>
+        <div id="main-status">Conectando à Nuvem...</div>
+
+        <div style="margin-top: 12px; border-top: 1px solid #333; padding-top: 10px;">
+            <div style="font-size: 11px; color: #888; text-transform: uppercase; font-weight: bold; margin-bottom: 5px;">
+                Simular Aproximação (Sem Sensor):
+            </div>
+            <input type="range" id="sim-dist-slider" min="0.40" max="5.00" step="0.05" value="5.00" style="width: 100%; cursor: pointer;" oninput="atualizarDistanciaManual(this.value)">
+        </div>
     </div>
 
     <div id="controls">
@@ -85,13 +92,20 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://unpkg.com/mqtt@4.3.7/dist/mqtt.min.js"></script>
 
     <script>
         // ==========================================
-        // CONFIGURAÇÃO DE CONEXÃO IOT REAL
+        // CONFIGURAÇÃO DE CONEXÃO IOT EM NUVEM (MQTT)
         // ==========================================
-        const ESP32_IP = "http://10.191.123.173"; 
-        let simulacaoAtiva = false; // Controla se o carro responde ao sensor físico
+        const MQTT_BROKER_WSS = "wss://broker.hivemq.com:8884/mqtt";
+        const TOPIC_CMD       = "lzinnbarbosa/plugcharge/cmd";
+        const TOPIC_STATUS    = "lzinnbarbosa/plugcharge/status";
+
+        const mqttClient = mqtt.connect(MQTT_BROKER_WSS);
+        let simulacaoAtiva = false;
+        let ultimoEstadoEnviado = "";
+        let cargaConcluidaEnviada = false;
 
         // --- AMBIENTE 3D ---
         const scene = new THREE.Scene();
@@ -246,103 +260,118 @@
         const uiBatTxt = document.getElementById('bat-perc'); const uiBatBar = document.getElementById('battery-level');
         const btnActuator = document.getElementById('actuator-btn');
 
-        // Ativa o rastreamento do sensor físico
+        // Eventos MQTT
+        mqttClient.on("connect", () => {
+            console.log("Conectado ao Broker MQTT!");
+            mqttClient.subscribe(TOPIC_STATUS);
+            uiStat.innerText = "Nuvem Conectada. Clique em Iniciar Simulação.";
+        });
+
+        mqttClient.on("message", (topic, message) => {
+            if (topic === TOPIC_STATUS && message.toString() === "ONLINE") {
+                uiStat.innerText = "ESP32-S3 Online e Sincronizada!";
+            }
+        });
+
+        function enviarComandoESP32(cmd, l1, l2) {
+            if (mqttClient && mqttClient.connected) {
+                mqttClient.publish(TOPIC_CMD, JSON.stringify({ cmd, l1, l2 }));
+            }
+        }
+
         function iniciar() { 
             simulacaoAtiva = true; 
             document.getElementById('start-btn').disabled = true; 
-            uiStat.innerText = "Simulação Ativa. Aproxime a mão do sensor na bancada.";
+            uiStat.innerText = "Use a barra 'Simular Aproximação' para estacionar.";
+            enviarComandoESP32("IDLE", "SISTEMA ATIVO", "APROXIME O EV");
         }
 
-        // Envia comando HTTP para o ESP32 ativar o Relé e muda animação
-        function acionarAtuador() { 
-            if(state === "PARKED_WAITING") {
-                state = "ACTUATOR_MOVING"; 
-                btnActuator.disabled = true;
-                
-                // Dispara o sinal via Wi-Fi para o hardware real
-                fetch(`${ESP32_IP}/ligar`)
-                    .then(res => res.json())
-                    .then(data => console.log("ESP32 respondeu: Atuador físico ligado!", data))
-                    .catch(err => console.error("Erro ao enviar comando /ligar:", err));
-            }
-        }
+        function atualizarDistanciaManual(valor) {
+            if (!simulacaoAtiva) return;
+            distance = parseFloat(valor);
 
-        // Envia comando HTTP para desligar o Relé imediatamente
-        function botaoStopEmergencia() { 
-            state = "E_STOP"; 
-            btnActuator.disabled = true;
-            
-            fetch(`${ESP32_IP}/desligar`)
-                .then(res => res.json())
-                .then(data => console.log("ESP32 respondeu: Emergência acionada!", data))
-                .catch(err => console.error("Erro ao enviar comando /desligar:", err));
-        }
+            if (state === "IDLE" || state === "PARKED_WAITING") {
+                carGroup.position.z = distance + 1.71 - 0.4;
 
-        function subirAtuador() {
-            if(state === "IDLE" || state === "PARKED_WAITING") {
-                if(movableArm.position.y < 1.1) {
-                    movableArm.position.y += 0.02; document.getElementById('alt-val').innerText = movableArm.position.y.toFixed(2) + " m";
+                if (distance <= 0.48) {
+                    state = "PARKED_WAITING";
+                    btnActuator.disabled = false;
+                    uiStat.innerText = "Estacionado. Módulo fêmea pronto para acoplar.";
+                    if (ultimoEstadoEnviado !== "PARKED") {
+                        ultimoEstadoEnviado = "PARKED";
+                        enviarComandoESP32("PARKED", "EV DETECTADO", "PRONTO P/ ACOPLAR");
+                    }
+                } else {
+                    state = "IDLE";
+                    btnActuator.disabled = true;
+                    uiStat.innerText = "Aproximando veículo da vaga...";
+                    if (ultimoEstadoEnviado !== "IDLE") {
+                        ultimoEstadoEnviado = "IDLE";
+                        enviarComandoESP32("IDLE", "APROXIME O EV", "DIST: " + distance.toFixed(2) + "m");
+                    }
                 }
             }
         }
+
+        function acionarAtuador() { 
+            if (state === "PARKED_WAITING") {
+                state = "ACTUATOR_MOVING"; 
+                btnActuator.disabled = true;
+                enviarComandoESP32("START", "ACOPLANDO...", "INDUCAO ATIVA");
+            }
+        }
+
+        function botaoStopEmergencia() { 
+            state = "E_STOP"; 
+            btnActuator.disabled = true;
+            enviarComandoESP32("STOP", "E-STOP ACIONADO", "SISTEMA TRAVADO");
+        }
+
+        function subirAtuador() {
+            if (state === "IDLE" || state === "PARKED_WAITING") {
+                if (movableArm.position.y < 1.1) {
+                    movableArm.position.y += 0.02; 
+                    document.getElementById('alt-val').innerText = movableArm.position.y.toFixed(2) + " m";
+                }
+            }
+        }
+
         function descerAtuador() {
-            if(state === "IDLE" || state === "PARKED_WAITING") {
-                if(movableArm.position.y > 0.2) {
-                    movableArm.position.y -= 0.02; document.getElementById('alt-val').innerText = movableArm.position.y.toFixed(2) + " m";
+            if (state === "IDLE" || state === "PARKED_WAITING") {
+                if (movableArm.position.y > 0.2) {
+                    movableArm.position.y -= 0.02; 
+                    document.getElementById('alt-val').innerText = movableArm.position.y.toFixed(2) + " m";
                 }
             }
         }
 
         function resetar() {
-            state = "IDLE"; battery = 15; carGroup.position.set(0, 0, 9);
+            simulacaoAtiva = false;
+            ultimoEstadoEnviado = "";
+            cargaConcluidaEnviada = false;
+            state = "IDLE"; 
+            battery = 15; 
             distance = 5.0;
-            movableArm.position.z = 0.4; movableArm.position.y = 0.45;
-            document.getElementById('start-btn').disabled = false; btnActuator.disabled = true;
-            uiStat.innerText = "Aguardando Aproximação"; uiStat.style.color = ""; uiAct.innerText = "Recuado"; uiMag.innerText = "OFF"; uiMag.style.color = "";
+            document.getElementById('sim-dist-slider').value = "5.00";
+            carGroup.position.set(0, 0, 9);
+            movableArm.position.z = 0.4; 
+            movableArm.position.y = 0.45;
+            document.getElementById('start-btn').disabled = false; 
+            btnActuator.disabled = true;
+            uiStat.innerText = "Aguardando Aproximação"; 
+            uiStat.style.color = ""; 
+            uiAct.innerText = "Recuado"; 
+            uiMag.innerText = "OFF"; 
+            uiMag.style.color = "";
             document.getElementById('alt-val').innerText = "0.45 m";
-            ledVermelho.material.emissive.setHex(0xff0000); ledVerde.material.emissive.setHex(0x000000);
+            ledVermelho.material.emissive.setHex(0xff0000); 
+            ledVerde.material.emissive.setHex(0x000000);
             atualizarDisplayTotem("SISTEMA READY", "DIST: 5.00m");
             
-            // Força o hardware a resetar também
-            fetch(`${ESP32_IP}/desligar`).catch(() => {});
+            enviarComandoESP32("RESET", "SISTEMA READY", "AGUARD. INICIO");
         }
 
-        // ========================================================
-        // LOOP IOT: REQUISITA DADOS DO SENSOR EM TEMPO REAL
-        // ========================================================
-        setInterval(() => {
-            if (!simulacaoAtiva) return;
-
-            // Puxa a distância real lida pelo sensor do ESP32
-            fetch(ESP32_IP)
-                .then(response => response.json())
-                .then(data => {
-                    // Armazena a distância que veio do sensor físico (em metros)
-                    distance = data.distance;
-
-                    // Se estiver no modo de aproximação, move o carro 3D na tela
-                    if(state === "IDLE" || state === "PARKED_WAITING") {
-                        // Alinha o chassi traseiro com a distância informada pelo sensor
-                        carGroup.position.z = distance + 1.71 - 0.4;
-                        
-                        // Trava de segurança da vaga (48 centímetros)
-                        if (distance <= 0.48) {
-                            state = "PARKED_WAITING";
-                            btnActuator.disabled = false; // Libera o botão digital na tela!
-                            uiStat.innerText = "Estacionado. Módulo fêmea pronto para acoplar.";
-                        } else {
-                            state = "IDLE";
-                            btnActuator.disabled = true;  // Bloqueia o botão se o carro estiver longe
-                            uiStat.innerText = "Aproxime a mão do sensor físico na bancada.";
-                        }
-                    }
-                })
-                .catch(err => {
-                    uiStat.innerText = "Buscando sinal do hardware em " + ESP32_IP + "...";
-                });
-        }, 150); // Roda a cada 150ms para que o movimento fique fluido
-
-        // --- ANIMATE ORIGINAL INTEGRADO ---
+        // --- ANIMATE INTEGRADO ---
         function animate() {
             requestAnimationFrame(animate); controls.update();
             
@@ -368,17 +397,26 @@
                     atualizarDisplayTotem("⚠️ E-STOP! ⚠️", "SISTEMA RETIDO");
                     ledVermelho.material.emissive.setHex(0xff0000); ledVerde.material.emissive.setHex(0x000000);
                     if (movableArm.position.z > 0.4) movableArm.position.z -= 0.02;
-                    else { state = "PARKED_WAITING"; btnActuator.disabled = false; uiStat.style.color = ""; }
                     break;
                 case "COUPLING":
                     uiMag.innerText = "ACOPLADO (CONECTADO)"; uiMag.style.color = "#00ff88"; uiAct.innerText = "Acoplado";
                     ledVermelho.material.emissive.setHex(0x000000); ledVerde.material.emissive.setHex(0x00ff00);
+                    enviarComandoESP32("START", "CARREGANDO EV", "INDUCAO ATIVA");
                     state = "CHARGING";
                     break;
                 case "CHARGING":
                     uiStat.innerText = "Energia ativa: Macho encaixado na Fêmea"; uiStat.style.color = "#00ff88";
-                    if (battery < 100) battery += 0.06;
-                    atualizarDisplayTotem("CARREGANDO EV", "BAT: " + Math.floor(battery) + "%");
+                    if (battery < 100) {
+                        battery += 0.06;
+                        atualizarDisplayTotem("CARREGANDO EV", "BAT: " + Math.floor(battery) + "%");
+                    } else {
+                        battery = 100;
+                        atualizarDisplayTotem("CARGA COMPLETA", "BAT: 100%");
+                        if (!cargaConcluidaEnviada) {
+                            cargaConcluidaEnviada = true;
+                            enviarComandoESP32("STOP", "CARGA COMPLETA", "BAT: 100%");
+                        }
+                    }
                     break;
             }
             renderer.render(scene, camera);
