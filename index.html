@@ -2,7 +2,7 @@
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
-    <title>Simulação Plug & Charge - Posto Completo v5.1</title>
+    <title>Simulação Plug & Charge - Posto Completo</title>
     <style>
         :root { --primary: #00f2ff; --bg: #0a0b10; --panel: rgba(16, 18, 27, 0.93); --danger: #ff2222; --action: #00ff88; }
         body { margin: 0; overflow: hidden; background: #87ceeb; font-family: 'Segoe UI', sans-serif; }
@@ -50,7 +50,7 @@
 
     <div id="ui-panel">
         <div class="panel-header">
-            <h1>Plug & Charge v5.1</h1>
+            <h1>Plug & Charge v5.2</h1>
             <button id="start-btn" class="btn-mini" onclick="iniciar()">Iniciar Simulação</button>
         </div>
         
@@ -75,7 +75,7 @@
 
         <div style="margin-top: 12px; border-top: 1px solid #333; padding-top: 10px;">
             <div style="font-size: 11px; color: #888; text-transform: uppercase; font-weight: bold; margin-bottom: 5px;">
-                Simular Aproximação (Sem Sensor):
+                Aproximação (Sensor Físico ou Manual):
             </div>
             <input type="range" id="sim-dist-slider" min="0.40" max="5.00" step="0.05" value="5.00" style="width: 100%; cursor: pointer;" oninput="atualizarDistanciaManual(this.value)">
         </div>
@@ -101,6 +101,7 @@
         const MQTT_BROKER_WSS = "wss://broker.hivemq.com:8884/mqtt";
         const TOPIC_CMD       = "lzinnbarbosa/plugcharge/cmd";
         const TOPIC_STATUS    = "lzinnbarbosa/plugcharge/status";
+        const TOPIC_DIST      = "lzinnbarbosa/plugcharge/dist";
 
         const mqttClient = mqtt.connect(MQTT_BROKER_WSS);
         let simulacaoAtiva = false;
@@ -264,12 +265,21 @@
         mqttClient.on("connect", () => {
             console.log("Conectado ao Broker MQTT!");
             mqttClient.subscribe(TOPIC_STATUS);
+            mqttClient.subscribe(TOPIC_DIST);
             uiStat.innerText = "Nuvem Conectada. Clique em Iniciar Simulação.";
         });
 
         mqttClient.on("message", (topic, message) => {
             if (topic === TOPIC_STATUS && message.toString() === "ONLINE") {
                 uiStat.innerText = "ESP32-S3 Online e Sincronizada!";
+            }
+            if (topic === TOPIC_DIST) {
+                const distReal = parseFloat(message.toString());
+                if (!isNaN(distReal) && simulacaoAtiva) {
+                    const distAjustada = Math.min(5.0, Math.max(0.4, distReal));
+                    document.getElementById('sim-dist-slider').value = distAjustada.toFixed(2);
+                    atualizarDistanciaManual(distAjustada);
+                }
             }
         });
 
@@ -282,7 +292,7 @@
         function iniciar() { 
             simulacaoAtiva = true; 
             document.getElementById('start-btn').disabled = true; 
-            uiStat.innerText = "Use a barra 'Simular Aproximação' para estacionar.";
+            uiStat.innerText = "Aproxime a mão do sensor físico ou use a barra.";
             enviarComandoESP32("IDLE", "SISTEMA ATIVO", "APROXIME O EV");
         }
 
