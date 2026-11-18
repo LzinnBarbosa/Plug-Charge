@@ -2,99 +2,390 @@
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
-    <title>Simulação Plug & Charge - Indução Magnética</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monitoramento de Posicionamento WPT - HC-SR04 & ESP32-S3</title>
     <style>
-        :root { --primary: #00f2ff; --bg: #0a0b10; --panel: rgba(16, 18, 27, 0.93); --danger: #ff2222; --action: #00ff88; --warn: #ffaa00; }
-        body { margin: 0; overflow: hidden; background: #87ceeb; font-family: 'Segoe UI', sans-serif; }
-        
-        /* Painel de Monitoramento */
-        #ui-panel { 
-            position: absolute; top: 20px; left: 20px; width: 370px; 
-            background: var(--panel); border: 1px solid rgba(0, 242, 255, 0.3); 
-            border-radius: 12px; padding: 18px; color: white; 
-            box-shadow: 0 8px 32px rgba(0,0,0,0.3); z-index: 100;
-            backdrop-filter: blur(5px);
+        :root {
+            --primary: #00f2ff;
+            --panel: rgba(15, 23, 42, 0.92);
+            --border: rgba(0, 242, 255, 0.28);
+            --success: #00e676;
+            --warning: #ffbb00;
+            --danger: #ff4d4d;
+            --text-muted: #94a3b8;
         }
-        
-        .panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid #333; padding-bottom: 10px; }
-        h1 { font-size: 13px; color: var(--primary); text-transform: uppercase; margin: 0; letter-spacing: 2px; }
-        
-        .metric { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 13px; }
-        .label { color: #aaa; } .value { font-family: 'Courier New', monospace; font-weight: bold; color: var(--primary); }
-        
-        /* Controles de Elevação da Plataforma (Alçapão) */
-        .height-controls { display: flex; gap: 10px; margin: 6px 0 10px 0; }
-        .btn-height { flex: 1; padding: 6px; font-size: 11px; background: #222; border: 1px solid #555; color: #fff; border-radius: 4px; cursor: pointer; }
-        .btn-height:hover { border-color: var(--primary); color: var(--primary); }
 
-        .battery-container { width: 100%; height: 18px; background: #222; border-radius: 4px; overflow: hidden; margin: 6px 0; border: 1px solid #444; }
-        #battery-level { width: 15%; height: 100%; background: linear-gradient(90deg, #ff3300, #00f2ff); transition: width 0.3s; }
-        
-        #main-status { text-align: center; padding: 10px; background: rgba(0,0,0,0.45); border-radius: 6px; margin-top: 10px; font-weight: bold; text-transform: uppercase; font-size: 11px; color: #ffaa00; border: 1px solid #444; }
-        
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #87ceeb;
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            color: #f8fafc;
+        }
+
+        /* Painel de Monitoramento (HUD) */
+        #ui-panel {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 380px;
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 18px;
+            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+            z-index: 100;
+            backdrop-filter: blur(8px);
+        }
+
+        .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 14px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+            padding-bottom: 10px;
+        }
+
+        h1 {
+            font-size: 13px;
+            color: var(--primary);
+            text-transform: uppercase;
+            margin: 0;
+            letter-spacing: 1.5px;
+        }
+
+        .badge-version {
+            font-size: 10px;
+            background: rgba(0, 242, 255, 0.14);
+            color: var(--primary);
+            border: 1px solid rgba(0, 242, 255, 0.35);
+            padding: 3px 8px;
+            border-radius: 999px;
+            font-weight: 700;
+        }
+
+        .metric {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 9px;
+            font-size: 13px;
+        }
+
+        .label { color: var(--text-muted); }
+
+        .value {
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-weight: bold;
+            color: #ffffff;
+        }
+
+        .status-pill {
+            padding: 2px 9px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+
+        .pill-ok { background: rgba(0, 230, 118, 0.16); color: var(--success); border: 1px solid rgba(0, 230, 118, 0.4); }
+        .pill-warn { background: rgba(255, 187, 0, 0.16); color: var(--warning); border: 1px solid rgba(255, 187, 0, 0.4); }
+        .pill-off { background: rgba(255, 77, 77, 0.16); color: var(--danger); border: 1px solid rgba(255, 77, 77, 0.4); }
+        .pill-blue { background: rgba(0, 168, 255, 0.18); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.45); }
+
+        /* Caixa de Status Operacional (Estados 1, 2 e 3) */
+        #state-box {
+            margin-top: 12px;
+            padding: 12px;
+            border-radius: 10px;
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            transition: all 0.25s ease;
+        }
+
+        #state-title {
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+            margin-bottom: 4px;
+            color: var(--danger);
+        }
+
+        #state-message {
+            font-size: 12.5px;
+            color: #e2e8f0;
+            line-height: 1.35;
+        }
+
+        /* Indicador Visual da Zona de Posicionamento */
+        #alignment-alert {
+            margin-top: 10px;
+            padding: 9px 12px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 700;
+            text-align: center;
+            background: rgba(255, 77, 77, 0.18);
+            border: 1px solid rgba(255, 77, 77, 0.5);
+            color: #ff8080;
+            transition: all 0.25s ease;
+        }
+
+        .slider-section {
+            margin-top: 14px;
+            border-top: 1px solid rgba(255, 255, 255, 0.12);
+            padding-top: 10px;
+        }
+
+        .slider-header {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            font-weight: 700;
+            margin-bottom: 6px;
+        }
+
+        input[type="range"] {
+            width: 100%;
+            cursor: pointer;
+            accent-color: var(--primary);
+        }
+
         /* Controles Inferiores */
-        #controls { position: absolute; bottom: 25px; left: 50%; transform: translateX(-50%); display: flex; gap: 10px; z-index: 100; flex-wrap: wrap; justify-content: center; width: 92%; max-width: 1050px; }
-        
-        button { background: #111; border: 1px solid var(--primary); color: var(--primary); padding: 11px 15px; border-radius: 8px; cursor: pointer; font-weight: bold; transition: all 0.25s; text-transform: uppercase; font-size: 11px; white-space: nowrap; }
-        button:hover { background: var(--primary); color: #000; box-shadow: 0 0 15px var(--primary); }
-        button:disabled { border-color: #333 !important; color: #555 !important; cursor: not-allowed; background: #050505 !important; box-shadow: none !important; }
-        
-        .btn-mini { padding: 6px 14px; font-size: 10px; border-radius: 6px; }
-        .btn-action { border-color: var(--action); color: var(--action); }
-        .btn-action:hover { background: var(--action); color: #000; box-shadow: 0 0 15px var(--action); }
-        .btn-recover { border-color: #00aaff; color: #00aaff; }
-        .btn-recover:hover { background: #00aaff; color: #000; box-shadow: 0 0 15px #00aaff; }
-        .btn-warn { border-color: var(--warn); color: var(--warn); }
-        .btn-warn:hover { background: var(--warn); color: #000; box-shadow: 0 0 15px var(--warn); }
-        .btn-emergency { border-color: var(--danger); color: var(--danger); }
-        .btn-emergency:hover { background: var(--danger); color: #fff; box-shadow: 0 0 20px var(--danger); }
+        #controls {
+            position: absolute;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 12px;
+            z-index: 100;
+        }
+
+        button {
+            background: rgba(15, 23, 42, 0.92);
+            border: 1px solid var(--primary);
+            color: var(--primary);
+            padding: 11px 18px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 700;
+            transition: all 0.2s;
+            text-transform: uppercase;
+            font-size: 11px;
+            letter-spacing: 0.6px;
+            backdrop-filter: blur(6px);
+        }
+
+        button:hover {
+            background: var(--primary);
+            color: #0f172a;
+            box-shadow: 0 0 16px rgba(0, 242, 255, 0.45);
+        }
+
+        /* Notificação Discreta no Canto Superior Direito (Toast Não Bloqueante) */
+        #position-toast {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            width: 350px;
+            background: rgba(15, 23, 42, 0.95);
+            border: 1px solid rgba(0, 230, 118, 0.45);
+            border-left: 5px solid var(--success);
+            border-radius: 12px;
+            padding: 14px 16px 16px 16px;
+            box-shadow: 0 14px 34px rgba(0, 0, 0, 0.45), 0 0 20px rgba(0, 230, 118, 0.18);
+            backdrop-filter: blur(10px);
+            z-index: 950;
+            overflow: hidden;
+            opacity: 0;
+            transform: translateX(115%);
+            pointer-events: none;
+            transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.25s ease;
+        }
+
+        #position-toast.show {
+            opacity: 1;
+            transform: translateX(0);
+            pointer-events: auto;
+        }
+
+        .toast-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 6px;
+        }
+
+        .toast-title-wrap {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .toast-badge-icon {
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            background: rgba(0, 230, 118, 0.18);
+            border: 1px solid var(--success);
+            color: var(--success);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 13px;
+            font-weight: 800;
+            flex-shrink: 0;
+        }
+
+        .toast-title {
+            font-size: 12.5px;
+            font-weight: 800;
+            color: var(--success);
+            letter-spacing: 0.4px;
+            text-transform: uppercase;
+        }
+
+        .toast-close {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            font-size: 16px;
+            line-height: 1;
+            padding: 2px 6px;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+
+        .toast-close:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: #ffffff;
+            box-shadow: none;
+        }
+
+        .toast-body {
+            font-size: 12.5px;
+            color: #e2e8f0;
+            line-height: 1.4;
+            padding-left: 30px;
+        }
+
+        .toast-body strong {
+            color: #ffffff;
+            display: block;
+            margin-bottom: 2px;
+        }
+
+        .toast-progress {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            height: 3px;
+            width: 100%;
+            background: var(--success);
+            transform-origin: left;
+            transform: scaleX(1);
+        }
+
+        #model-loading {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: var(--panel);
+            border: 1px solid var(--border);
+            padding: 8px 14px;
+            border-radius: 8px;
+            font-size: 12px;
+            color: var(--primary);
+            z-index: 100;
+        }
     </style>
 </head>
 <body>
 
+    <div id="model-loading">Carregando malha 3D do veículo...</div>
+
+    <!-- Painel de Monitoramento Real -->
     <div id="ui-panel">
         <div class="panel-header">
-            <h1>Indução Magnética</h1>
-            <button id="start-btn" class="btn-mini" onclick="iniciar()">Iniciar Simulação</button>
-        </div>
-        
-        <div class="metric"><span class="label">Veículo:</span><span class="value" style="color: #fff;">BYD Dolphin Mini</span></div>
-        <div class="metric"><span class="label">Receptor EV:</span><span class="value" style="color: #e69d66;">Acoplado ao Chassi</span></div>
-        <div class="metric"><span class="label">Distância Sensor:</span><span id="dist-val" class="value">5.00 m</span></div>
-        <div class="metric"><span class="label">Elevação Alçapão:</span><span id="alt-val" class="value">0.03 m</span></div>
-        <div class="metric"><span class="label">Eficiência Indução:</span><span id="eff-val" class="value">78%</span></div>
-        <div class="metric"><span class="label">LEDs Plataforma:</span><span id="leds-val" class="value" style="color: #ff3333;">VERMELHO (Standby)</span></div>
-        
-        <div style="margin: 6px 0 4px 0; font-size: 11px; color: #888; text-transform: uppercase; font-weight: bold;">Ajuste de Altura da Base (Air Gap):</div>
-        <div class="height-controls">
-            <button class="btn-height" onclick="subirPlataforma()">▲ Elevar Base</button>
-            <button class="btn-height" onclick="descerPlataforma()">▼ Abaixar Base</button>
+            <h1>Monitoramento WPT • HC-SR04</h1>
+            <span class="badge-version">PROTÓTIPO REAL</span>
         </div>
 
-        <div class="metric"><span class="label">Plataforma Chão:</span><span id="act-val" class="value">Nivelada (Chão)</span></div>
-        <div class="metric"><span class="label">Campo Magnético:</span><span id="mag-val" class="value">OFF</span></div>
-        
-        <div style="margin-top: 6px;">
-            <div class="metric"><span class="label">Nível de Carga (SoC):</span><span id="bat-perc" class="value">15%</span></div>
-            <div class="battery-container"><div id="battery-level"></div></div>
+        <div class="metric">
+            <span class="label">MQTT Conectado:</span>
+            <span id="mqtt-status" class="status-pill pill-warn">Conectando...</span>
         </div>
-        <div id="main-status">Conectando à Nuvem...</div>
+        <div class="metric">
+            <span class="label">ESP32-S3:</span>
+            <span id="esp-status" class="status-pill pill-off">Aguardando Sinal</span>
+        </div>
+        <div class="metric">
+            <span class="label">Distância HC-SR04:</span>
+            <span id="dist-val" class="value" style="color: var(--primary);">3.50 m</span>
+        </div>
+        <div class="metric">
+            <span class="label">LEDs Módulo Indutor:</span>
+            <span id="led-module-status" class="status-pill pill-off">LED Vermelho (Desconectado)</span>
+        </div>
+        <div class="metric">
+            <span class="label">Veículo Detectado:</span>
+            <span id="det-val" class="status-pill pill-off">NÃO</span>
+        </div>
+        <div class="metric">
+            <span class="label">Veículo Posicionado:</span>
+            <span id="pos-val" class="status-pill pill-off">NÃO</span>
+        </div>
+        <div class="metric">
+            <span class="label">Posição Validada:</span>
+            <span id="val-status" class="status-pill pill-off">PENDENTE</span>
+        </div>
 
-        <div style="margin-top: 10px; border-top: 1px solid #333; padding-top: 8px;">
-            <div style="font-size: 11px; color: #888; text-transform: uppercase; font-weight: bold; margin-bottom: 5px;">
-                Aproximação (Sensor Físico ou Manual):
+        <!-- Status dos 3 Estados -->
+        <div id="state-box">
+            <div id="state-title">AGUARDANDO POSICIONAMENTO</div>
+            <div id="state-message">Aproxime o veículo da área de carregamento.</div>
+        </div>
+
+        <!-- Indicador Visual da Área de Posicionamento -->
+        <div id="alignment-alert">⚠ Ajuste o posicionamento do veículo.</div>
+
+        <!-- Simulação Local de Distância -->
+        <div class="slider-section">
+            <div class="slider-header">
+                <span>Simular Distância HC-SR04 (Teste Local)</span>
+                <span style="color: var(--primary);">Alvo: ≤ 0.48 m</span>
             </div>
-            <input type="range" id="sim-dist-slider" min="0.40" max="5.00" step="0.05" value="5.00" style="width: 100%; cursor: pointer;" oninput="atualizarDistanciaManual(this.value)">
+            <input type="range" id="sim-dist-slider" min="0.40" max="3.50" step="0.01" value="3.50" oninput="processarDistancia(this.value)">
         </div>
     </div>
 
+    <!-- Controles de Visualização -->
     <div id="controls">
-        <button id="actuator-btn" class="btn-action" onclick="iniciarInducao()" disabled>Iniciar Indução</button>
-        <button id="recover-btn" class="btn-recover" onclick="rearmarSistema()" disabled>Rearmar Sistema</button>
-        <button id="cam-btn" onclick="alternarVistaSubassoalho()">Vista Acoplamento</button>
-        <button id="outage-btn" class="btn-warn" onclick="simularQuedaEnergia()">Queda Energia</button>
-        <button id="stop-btn" class="btn-emergency" onclick="botaoStopEmergencia()">E-STOP (PARAR)</button>
-        <button id="reset-btn" onclick="resetar()">Resetar Cenario</button>
+        <button id="cam-btn" onclick="alternarVistaAcoplamento()">Vista Acoplamento (Base / Receptor)</button>
+        <button onclick="resetarSimulacao()">Resetar Posição</button>
+    </div>
+
+    <!-- Notificação Informativa no Canto Superior Direito (Não Bloqueante) -->
+    <div id="position-toast" role="status" aria-live="polite">
+        <div class="toast-header">
+            <div class="toast-title-wrap">
+                <span class="toast-badge-icon">✓</span>
+                <span class="toast-title">Posicionamento Confirmado</span>
+            </div>
+            <button class="toast-close" onclick="ocultarNotificacaoCanto()" title="Fechar aviso">×</button>
+        </div>
+        <div class="toast-body">
+            <strong>Veículo alinhado com a base transmissora.</strong>
+            Pronto para carregamento por indução.
+        </div>
+        <div id="toast-progress-bar" class="toast-progress"></div>
     </div>
 
     <canvas id="totem-screen-canvas" width="256" height="128" style="display: none;"></canvas>
@@ -105,28 +396,90 @@
     <script src="https://unpkg.com/mqtt@4.3.7/dist/mqtt.min.js"></script>
 
     <script>
-        // ==========================================
-        // CONFIGURAÇÃO DE CONEXÃO IOT EM NUVEM (MQTT)
-        // ==========================================
-        const MQTT_BROKER_WSS = "wss://broker.hivemq.com:8884/mqtt";
-        const TOPIC_CMD       = "lzinnbarbosa/plugcharge/cmd";
-        const TOPIC_STATUS    = "lzinnbarbosa/plugcharge/status";
-        const TOPIC_DIST      = "lzinnbarbosa/plugcharge/dist";
+        // ============================================================
+        // 1. PARÂMETROS REAIS DO PROTÓTIPO E COMUNICAÇÃO MQTT
+        // ============================================================
+        const MQTT_BROKER_WSS  = "wss://broker.hivemq.com:8884/mqtt";
+        const TOPIC_DIST       = "lzinnbarbosa/plugcharge/dist";
+        const TOPIC_STATUS     = "lzinnbarbosa/plugcharge/status";
 
-        const mqttClient = mqtt.connect(MQTT_BROKER_WSS);
-        let simulacaoAtiva = false;
-        let ultimoEstadoEnviado = "";
-        let cargaConcluidaEnviada = false;
-        let vistaSubassoalhoAtiva = false;
-        let timerRearme = null;
+        const DIST_DETECCAO    = 2.50; // Faixa de detecção de aproximação (m)
+        const DIST_ALINHADO    = 0.48; // Limiar de posição correta sobre a base fixa (m)
+        const DIST_SAIDA_ZONA  = 0.60; // Histerese ampla para não re-disparar com oscilações do sensor (m)
+        const DURACAO_TOAST_MS = 5000; // Tempo que o aviso permanece visível no canto (5 segundos)
 
-        // --- AMBIENTE 3D ---
+        let distance = 3.50;
+        let notificacaoJaEnviada = false;
+        let toastTimer = null;
+        let vistaAcoplamentoAtiva = false;
+
+        // ============================================================
+        // 2. NOTIFICAÇÃO INFORMATIVA NO CANTO (SEM BLOQUEAR A TELA)
+        // ============================================================
+        function tocarSomConfirmacao() {
+            try {
+                const AudioCtx = window.AudioContext || window.webkitAudioContext;
+                if (!AudioCtx) return;
+                const ctx = new AudioCtx();
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+
+                osc.type = "sine";
+                osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+                osc.frequency.setValueAtTime(880.00, ctx.currentTime + 0.12);
+
+                gain.gain.setValueAtTime(0.07, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.42);
+
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start();
+                osc.stop(ctx.currentTime + 0.42);
+            } catch (e) {}
+        }
+
+        function mostrarNotificacaoCanto() {
+            const toast = document.getElementById("position-toast");
+            const bar = document.getElementById("toast-progress-bar");
+
+            if (toastTimer) {
+                clearTimeout(toastTimer);
+                toastTimer = null;
+            }
+
+            // Reinicia a animação da barra de progresso
+            bar.style.transition = "none";
+            bar.style.transform = "scaleX(1)";
+            void bar.offsetWidth;
+            bar.style.transition = `transform ${DURACAO_TOAST_MS}ms linear`;
+            bar.style.transform = "scaleX(0)";
+
+            toast.classList.add("show");
+            tocarSomConfirmacao();
+
+            toastTimer = setTimeout(() => {
+                ocultarNotificacaoCanto();
+            }, DURACAO_TOAST_MS);
+        }
+
+        function ocultarNotificacaoCanto() {
+            const toast = document.getElementById("position-toast");
+            toast.classList.remove("show");
+            if (toastTimer) {
+                clearTimeout(toastTimer);
+                toastTimer = null;
+            }
+        }
+
+        // ============================================================
+        // 3. CENA 3D (THREE.JS)
+        // ============================================================
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x87ceeb);
         scene.fog = new THREE.Fog(0x87ceeb, 25, 120);
 
         const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.02, 1000);
-        camera.position.set(11, 7, 13);
+        camera.position.set(10.5, 6.5, 12.5);
 
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
@@ -136,180 +489,170 @@
 
         const controls = new THREE.OrbitControls(camera, renderer.domElement);
         controls.enableDamping = true;
-        controls.target.set(0, 1.0, 2);
+        controls.target.set(0, 0.9, 2.0);
 
-        // Luzes
         const sunLight = new THREE.DirectionalLight(0xffffff, 1.3);
         sunLight.position.set(15, 25, 10);
-        sunLight.castShadow = true; sunLight.shadow.mapSize.width = 2048; sunLight.shadow.mapSize.height = 2048;
+        sunLight.castShadow = true;
+        sunLight.shadow.mapSize.width = 2048;
+        sunLight.shadow.mapSize.height = 2048;
         scene.add(sunLight);
 
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
-        scene.add(ambientLight);
+        scene.add(new THREE.AmbientLight(0xffffff, 0.8));
 
-        const underCarLight1 = new THREE.PointLight(0xffffff, 1.3, 6);
-        underCarLight1.position.set(0, -0.6, 2.0);
-        scene.add(underCarLight1);
+        const underCarLight = new THREE.PointLight(0xffffff, 1.3, 5);
+        underCarLight.position.set(0, -0.4, 2.0);
+        scene.add(underCarLight);
 
-        const underCarLight2 = new THREE.PointLight(0xffffff, 1.0, 5);
-        underCarLight2.position.set(1.2, 0.08, 2.3);
-        scene.add(underCarLight2);
-
-        // --- CONSTRUÇÃO DO POSTO ---
-        const pistaGeo = new THREE.PlaneGeometry(16, 40);
-        const pistaMat = new THREE.MeshStandardMaterial({ color: 0x282828, roughness: 0.85 });
-        const pista = new THREE.Mesh(pistaGeo, pistaMat); pista.rotation.x = -Math.PI / 2; pista.receiveShadow = true;
+        // Piso, Calçadas e Vaga
+        const pista = new THREE.Mesh(
+            new THREE.PlaneGeometry(16, 40),
+            new THREE.MeshStandardMaterial({ color: 0x282828, roughness: 0.85 })
+        );
+        pista.rotation.x = -Math.PI / 2;
+        pista.receiveShadow = true;
         scene.add(pista);
 
         const calcadaMat = new THREE.MeshStandardMaterial({ color: 0xaaaaaa, roughness: 0.7 });
         const gramaMat = new THREE.MeshStandardMaterial({ color: 0x3b7a3b, roughness: 0.9 });
 
-        const calcadaEsq = new THREE.Mesh(new THREE.BoxGeometry(10, 0.15, 40), calcadaMat); calcadaEsq.position.set(-13, 0.075, 0); calcadaEsq.receiveShadow = true; scene.add(calcadaEsq);
-        const gramaEsq = new THREE.Mesh(new THREE.PlaneGeometry(9.6, 39.6), gramaMat); gramaEsq.rotation.x = -Math.PI/2; gramaEsq.position.set(-13, 0.16, 0); scene.add(gramaEsq);
+        const calcadaEsq = new THREE.Mesh(new THREE.BoxGeometry(10, 0.15, 40), calcadaMat);
+        calcadaEsq.position.set(-13, 0.075, 0);
+        calcadaEsq.receiveShadow = true;
+        scene.add(calcadaEsq);
 
-        const calcadaDir = new THREE.Mesh(new THREE.BoxGeometry(10, 0.15, 40), calcadaMat); calcadaDir.position.set(13, 0.075, 0); calcadaDir.receiveShadow = true; scene.add(calcadaDir);
-        const gramaDir = new THREE.Mesh(new THREE.PlaneGeometry(9.6, 39.6), gramaMat); gramaDir.rotation.x = -Math.PI/2; gramaDir.position.set(13, 0.16, 0); scene.add(gramaDir);
+        const gramaEsq = new THREE.Mesh(new THREE.PlaneGeometry(9.6, 39.6), gramaMat);
+        gramaEsq.rotation.x = -Math.PI / 2;
+        gramaEsq.position.set(-13, 0.16, 0);
+        scene.add(gramaEsq);
 
-        // Vaga de Estacionamento
+        const calcadaDir = new THREE.Mesh(new THREE.BoxGeometry(10, 0.15, 40), calcadaMat);
+        calcadaDir.position.set(13, 0.075, 0);
+        calcadaDir.receiveShadow = true;
+        scene.add(calcadaDir);
+
+        const gramaDir = new THREE.Mesh(new THREE.PlaneGeometry(9.6, 39.6), gramaMat);
+        gramaDir.rotation.x = -Math.PI / 2;
+        gramaDir.position.set(13, 0.16, 0);
+        scene.add(gramaDir);
+
+        // Demarcação da Vaga
         const vagaGroup = new THREE.Group();
-        const areaVerde = new THREE.Mesh(new THREE.PlaneGeometry(3.6, 6.5), new THREE.MeshStandardMaterial({ color: 0x1b5e20, roughness: 0.6 }));
-        areaVerde.rotation.x = -Math.PI / 2; areaVerde.position.set(0, 0.01, 2.5); areaVerde.receiveShadow = true; vagaGroup.add(areaVerde);
-        const linhaMat = new THREE.MeshStandardMaterial({ color: 0xffffff });
-        const l1 = new THREE.Mesh(new THREE.PlaneGeometry(0.12, 6.5), linhaMat); l1.rotation.x = -Math.PI / 2; l1.position.set(-1.8, 0.02, 2.5);
-        const l2 = l1.clone(); l2.position.x = 1.8;
-        const lTraseira = new THREE.Mesh(new THREE.PlaneGeometry(3.6, 0.12), linhaMat); lTraseira.rotation.x = -Math.PI / 2; lTraseira.position.set(0, 0.02, 5.75);
-        vagaGroup.add(l1, l2, lTraseira); scene.add(vagaGroup);
+        const areaVaga = new THREE.Mesh(
+            new THREE.PlaneGeometry(3.6, 6.5),
+            new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.75 })
+        );
+        areaVaga.rotation.x = -Math.PI / 2;
+        areaVaga.position.set(0, 0.01, 2.5);
+        areaVaga.receiveShadow = true;
+        vagaGroup.add(areaVaga);
 
+        const linhaMat = new THREE.MeshStandardMaterial({ color: 0xffffff });
+        const l1 = new THREE.Mesh(new THREE.PlaneGeometry(0.12, 6.5), linhaMat);
+        l1.rotation.x = -Math.PI / 2;
+        l1.position.set(-1.8, 0.02, 2.5);
+        const l2 = l1.clone();
+        l2.position.x = 1.8;
+        const lTraseira = new THREE.Mesh(new THREE.PlaneGeometry(3.6, 0.12), linhaMat);
+        lTraseira.rotation.x = -Math.PI / 2;
+        lTraseira.position.set(0, 0.02, 5.75);
+        vagaGroup.add(l1, l2, lTraseira);
+        scene.add(vagaGroup);
+
+        // Cobertura e Árvores
         function criarArvore(x, z) {
             const arvore = new THREE.Group();
-            const tronco = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.2, 2.5), new THREE.MeshStandardMaterial({color: 0x5a3d28})); tronco.position.y = 1.25;
-            const copa = new THREE.Mesh(new THREE.SphereGeometry(1.2, 16, 16), new THREE.MeshStandardMaterial({color: 0x1b4314, roughness: 0.8})); copa.position.y = 2.8;
-            arvore.add(tronco, copa); arvore.position.set(x, 0.15, z); scene.add(arvore);
+            const tronco = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.2, 2.5), new THREE.MeshStandardMaterial({ color: 0x5a3d28 }));
+            tronco.position.y = 1.25;
+            const copa = new THREE.Mesh(new THREE.SphereGeometry(1.2, 16, 16), new THREE.MeshStandardMaterial({ color: 0x1b4314, roughness: 0.8 }));
+            copa.position.y = 2.8;
+            arvore.add(tronco, copa);
+            arvore.position.set(x, 0.15, z);
+            scene.add(arvore);
         }
         criarArvore(-13, -5); criarArvore(-13, 8); criarArvore(13, -8); criarArvore(13, 6);
 
         const estruturaMat = new THREE.MeshStandardMaterial({ color: 0xeeeeee, metalness: 0.2 });
-        const pilar1 = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 7), estruturaMat); pilar1.position.set(-5, 3.5, -2); scene.add(pilar1);
-        const pilar2 = pilar1.clone(); pilar2.position.x = 5; scene.add(pilar2);
-        const teto = new THREE.Mesh(new THREE.BoxGeometry(15, 0.5, 9), estruturaMat); teto.position.set(0, 7, 1); scene.add(teto);
+        const pilar1 = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 7), estruturaMat);
+        pilar1.position.set(-5, 3.5, -2);
+        const pilar2 = pilar1.clone();
+        pilar2.position.x = 5;
+        const teto = new THREE.Mesh(new THREE.BoxGeometry(15, 0.5, 9), estruturaMat);
+        teto.position.set(0, 7, 1);
+        scene.add(pilar1, pilar2, teto);
 
-        const paredeLoja = new THREE.Mesh(new THREE.BoxGeometry(16, 6, 5), new THREE.MeshStandardMaterial({color: 0xdddddd})); paredeLoja.position.set(0, 3, -12); scene.add(paredeLoja);
-
-        // --- TEXTURA DA TELA DO TOTEM ---
-        const canvasTela = document.getElementById('totem-screen-canvas');
-        const ctxTela = canvasTela.getContext('2d');
+        // --- TOTEM E DISPLAY DIGITAL ---
+        const canvasTela = document.getElementById("totem-screen-canvas");
+        const ctxTela = canvasTela.getContext("2d");
         const texturaTela = new THREE.CanvasTexture(canvasTela);
 
-        function atualizarDisplayTotem(txt1, txt2, corBorda = '#00f2ff') {
-            ctxTela.fillStyle = '#001a33'; ctxTela.fillRect(0, 0, 256, 128);
-            ctxTela.strokeStyle = corBorda; ctxTela.lineWidth = 6; ctxTela.strokeRect(4, 4, 248, 120);
-            ctxTela.fillStyle = corBorda; ctxTela.font = 'bold 21px monospace'; ctxTela.textAlign = 'center'; ctxTela.fillText(txt1, 128, 50);
-            ctxTela.fillStyle = '#00ff88'; ctxTela.font = 'bold 25px monospace'; ctxTela.fillText(txt2, 128, 95); texturaTela.needsUpdate = true;
+        function atualizarDisplayTotem(linha1, linha2, corBorda = "#ff4d4d") {
+            ctxTela.fillStyle = "#081226";
+            ctxTela.fillRect(0, 0, 256, 128);
+            ctxTela.strokeStyle = corBorda;
+            ctxTela.lineWidth = 6;
+            ctxTela.strokeRect(4, 4, 248, 120);
+            ctxTela.fillStyle = corBorda;
+            ctxTela.font = "bold 19px monospace";
+            ctxTela.textAlign = "center";
+            ctxTela.fillText(linha1, 128, 48);
+            ctxTela.fillStyle = "#ffffff";
+            ctxTela.font = "bold 24px monospace";
+            ctxTela.fillText(linha2, 128, 94);
+            texturaTela.needsUpdate = true;
         }
-        atualizarDisplayTotem("SISTEMA READY", "DIST: 5.00m");
+        atualizarDisplayTotem("AGUARDANDO EV", "DIST: 3.50m", "#ff4d4d");
 
-        // --- TOTEM DE CONTROLE ---
-        const totemGroup = new THREE.Group(); totemGroup.position.set(0, 0, -1.2);
-        const corpoTotem = new THREE.Mesh(new THREE.BoxGeometry(1.5, 3.8, 0.8), new THREE.MeshStandardMaterial({color: 0x242528, roughness: 0.5})); corpoTotem.position.y = 1.9; totemGroup.add(corpoTotem);
+        const totemGroup = new THREE.Group();
+        totemGroup.position.set(0, 0, -1.2);
+        const corpoTotem = new THREE.Mesh(
+            new THREE.BoxGeometry(1.5, 3.8, 0.8),
+            new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.5 })
+        );
+        corpoTotem.position.y = 1.9;
+        totemGroup.add(corpoTotem);
 
-        const displayDigital = new THREE.Mesh(new THREE.PlaneGeometry(0.95, 0.58), new THREE.MeshBasicMaterial({map: texturaTela})); displayDigital.position.set(0, 2.5, 0.41); totemGroup.add(displayDigital);
-        const ledVermelho = new THREE.Mesh(new THREE.SphereGeometry(0.05, 16, 16), new THREE.MeshStandardMaterial({color: 0xff0000, emissive: 0xff0000})); ledVermelho.position.set(-0.35, 3.3, 0.41); totemGroup.add(ledVermelho);
-        const ledVerde = new THREE.Mesh(new THREE.SphereGeometry(0.05, 16, 16), new THREE.MeshStandardMaterial({color: 0x002200, emissive: 0x000000})); ledVerde.position.set(0.35, 3.3, 0.41); totemGroup.add(ledVerde);
+        const displayDigital = new THREE.Mesh(
+            new THREE.PlaneGeometry(0.95, 0.58),
+            new THREE.MeshBasicMaterial({ map: texturaTela })
+        );
+        displayDigital.position.set(0, 2.5, 0.41);
+        totemGroup.add(displayDigital);
 
-        // ============================================================
-        // MODELO 3D REALISTA DO SENSOR ULTRASSÔNICO HC-SR04
-        // ============================================================
+        // Sensor HC-SR04 3D no Totem
         function criarSensorHCSR04() {
             const sensorGroup = new THREE.Group();
-
-            const pcbCanvas = document.createElement('canvas');
+            const pcbCanvas = document.createElement("canvas");
             pcbCanvas.width = 256; pcbCanvas.height = 128;
-            const pctx = pcbCanvas.getContext('2d');
-            pctx.fillStyle = '#0a52a8';
+            const pctx = pcbCanvas.getContext("2d");
+            pctx.fillStyle = "#0a52a8";
             pctx.fillRect(0, 0, 256, 128);
-            pctx.strokeStyle = '#ffffff';
+            pctx.strokeStyle = "#ffffff";
             pctx.lineWidth = 3;
             pctx.strokeRect(4, 4, 248, 120);
-
-            [[15, 15], [241, 15], [15, 113], [241, 113]].forEach(([x, y]) => {
-                pctx.beginPath(); pctx.arc(x, y, 6, 0, Math.PI * 2);
-                pctx.fillStyle = '#181a1f'; pctx.fill();
-                pctx.strokeStyle = '#d4af37'; pctx.lineWidth = 2; pctx.stroke();
-            });
-
-            pctx.fillStyle = '#ffffff';
-            pctx.font = 'bold 16px monospace';
-            pctx.textAlign = 'center';
-            pctx.fillText('HC-SR04', 128, 72);
-            pctx.font = 'bold 14px monospace';
-            pctx.fillText('T', 26, 104);
-            pctx.fillText('R', 230, 104);
-            pctx.font = 'bold 9px monospace';
-            pctx.fillText('VCC Trig Echo GND', 128, 117);
+            pctx.fillStyle = "#ffffff";
+            pctx.font = "bold 18px monospace";
+            pctx.textAlign = "center";
+            pctx.fillText("HC-SR04", 128, 72);
+            pctx.font = "bold 10px monospace";
+            pctx.fillText("VCC  Trig  Echo  GND", 128, 116);
             const pcbTex = new THREE.CanvasTexture(pcbCanvas);
 
-            const pcbMatAzul = new THREE.MeshStandardMaterial({ color: 0x0a52a8, roughness: 0.45, metalness: 0.1 });
+            const pcbMat = new THREE.MeshStandardMaterial({ color: 0x0a52a8, roughness: 0.45 });
             const pcbFrontMat = new THREE.MeshStandardMaterial({ map: pcbTex, roughness: 0.4 });
             const pcbMesh = new THREE.Mesh(
                 new THREE.BoxGeometry(0.45, 0.20, 0.018),
-                [pcbMatAzul, pcbMatAzul, pcbMatAzul, pcbMatAzul, pcbFrontMat, pcbMatAzul]
+                [pcbMat, pcbMat, pcbMat, pcbMat, pcbFrontMat, pcbMat]
             );
             sensorGroup.add(pcbMesh);
 
-            const meshCanvas = document.createElement('canvas');
-            meshCanvas.width = 64; meshCanvas.height = 64;
-            const mctx = meshCanvas.getContext('2d');
-            mctx.fillStyle = '#1b1d22';
-            mctx.fillRect(0, 0, 64, 64);
-            mctx.strokeStyle = '#7a808a';
-            mctx.lineWidth = 1.5;
-            for (let i = 0; i <= 64; i += 6) {
-                mctx.beginPath(); mctx.moveTo(i, 0); mctx.lineTo(i, 64); mctx.stroke();
-                mctx.beginPath(); mctx.moveTo(0, i); mctx.lineTo(64, i); mctx.stroke();
-            }
-            const grilleTex = new THREE.CanvasTexture(meshCanvas);
-
-            const aluMat = new THREE.MeshStandardMaterial({ color: 0xd0d5dd, metalness: 0.88, roughness: 0.22 });
-            const grilleMat = new THREE.MeshStandardMaterial({ map: grilleTex, metalness: 0.5, roughness: 0.4 });
-
+            const aluMat = new THREE.MeshStandardMaterial({ color: 0xd0d5dd, metalness: 0.85, roughness: 0.22 });
             [-0.118, 0.118].forEach((posX) => {
-                const capsula = new THREE.Group();
-                const cilindro = new THREE.Mesh(new THREE.CylinderGeometry(0.076, 0.076, 0.085, 32), aluMat);
-                cilindro.rotation.x = Math.PI / 2;
-                cilindro.position.z = 0.048;
-
-                const aroFrontal = new THREE.Mesh(new THREE.TorusGeometry(0.071, 0.006, 12, 32), aluMat);
-                aroFrontal.position.z = 0.091;
-
-                const telaInterna = new THREE.Mesh(new THREE.CircleGeometry(0.068, 32), grilleMat);
-                telaInterna.position.z = 0.089;
-
-                capsula.add(cilindro, aroFrontal, telaInterna);
-                capsula.position.set(posX, 0.006, 0);
-                sensorGroup.add(capsula);
+                const cil = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.085, 32), aluMat);
+                cil.rotation.x = Math.PI / 2;
+                cil.position.set(posX, 0.005, 0.048);
+                sensorGroup.add(cil);
             });
-
-            const cristal = new THREE.Mesh(
-                new THREE.BoxGeometry(0.095, 0.032, 0.016),
-                new THREE.MeshStandardMaterial({ color: 0xe2e6ec, metalness: 0.9, roughness: 0.15 })
-            );
-            cristal.position.set(0, 0.068, 0.015);
-            sensorGroup.add(cristal);
-
-            const headerBar = new THREE.Mesh(
-                new THREE.BoxGeometry(0.115, 0.022, 0.022),
-                new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.7 })
-            );
-            headerBar.position.set(0, -0.105, 0.006);
-            sensorGroup.add(headerBar);
-
-            const pinMat = new THREE.MeshStandardMaterial({ color: 0xd8dde6, metalness: 0.9, roughness: 0.2 });
-            [-0.039, -0.013, 0.013, 0.039].forEach((px) => {
-                const pino = new THREE.Mesh(new THREE.CylinderGeometry(0.003, 0.003, 0.055, 8), pinMat);
-                pino.position.set(px, -0.132, 0.006);
-                sensorGroup.add(pino);
-            });
-
             return sensorGroup;
         }
 
@@ -319,735 +662,567 @@
         scene.add(totemGroup);
 
         // ============================================================
-        // PLATAFORMA / ALÇAPÃO DE INDUÇÃO MAGNÉTICA + LEDS VERMELHO E AZUL
+        // 4. MÓDULO INDUTOR TRANSMISSOR FIXO (COM LEDS VERMELHO E AZUL)
         // ============================================================
         const POS_Z_PLATAFORMA = 2.0;
-        const minElevacao = 0.03;
-        let maxElevacao = 0.09;
+        const plataformaFixa = new THREE.Group();
+        plataformaFixa.position.set(0, 0.025, POS_Z_PLATAFORMA);
 
-        const molduraAlcapao = new THREE.Group();
-        molduraAlcapao.position.set(0, 0.012, POS_Z_PLATAFORMA);
-
-        const recessoBase = new THREE.Mesh(
-            new THREE.BoxGeometry(0.90, 0.018, 1.16),
-            new THREE.MeshStandardMaterial({ color: 0x12141a, roughness: 0.85, metalness: 0.3 })
+        const chassiTx = new THREE.Mesh(
+            new THREE.BoxGeometry(0.78, 0.026, 1.04),
+            new THREE.MeshStandardMaterial({ color: 0x3f444e, metalness: 0.55, roughness: 0.45 })
         );
-        recessoBase.receiveShadow = true;
-        molduraAlcapao.add(recessoBase);
+        chassiTx.position.y = -0.008;
+        chassiTx.receiveShadow = true;
+        plataformaFixa.add(chassiTx);
 
-        const cantoMat = new THREE.MeshStandardMaterial({ color: 0xd99b00, roughness: 0.5 });
-        [[-0.41, -0.54], [0.41, -0.54], [-0.41, 0.54], [0.41, 0.54]].forEach(([cx, cz]) => {
-            const canto = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.022, 0.07), cantoMat);
-            canto.position.set(cx, 0.003, cz);
-            molduraAlcapao.add(canto);
+        // 4 Cantoneiras amarelas nos vértices
+        const cantoneiraMat = new THREE.MeshStandardMaterial({ color: 0xfacc15, roughness: 0.35 });
+        [[-0.35, -0.48], [0.35, -0.48], [-0.35, 0.48], [0.35, 0.48]].forEach(([cx, cz]) => {
+            const canto = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.028, 0.08), cantoneiraMat);
+            canto.position.set(cx, -0.007, cz);
+            plataformaFixa.add(canto);
         });
-        scene.add(molduraAlcapao);
 
-        const tesouraGroup = new THREE.Group();
-        tesouraGroup.position.set(0, 0.015, POS_Z_PLATAFORMA);
-        const bracoMat = new THREE.MeshStandardMaterial({ color: 0x454b57, metalness: 0.75, roughness: 0.3 });
-        [-0.22, 0.22].forEach((bx) => {
-            const haste1 = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.14, 0.04), bracoMat);
-            haste1.rotation.x = 0.55;
-            haste1.position.set(bx, 0.05, 0);
-            const haste2 = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.14, 0.04), bracoMat);
-            haste2.rotation.x = -0.55;
-            haste2.position.set(bx, 0.05, 0);
-            tesouraGroup.add(haste1, haste2);
-        });
-        scene.add(tesouraGroup);
-
-        const plataformaInducao = new THREE.Group();
-        let elevacaoPlataforma = minElevacao;
-        let elevacaoAlvo = minElevacao;
-        plataformaInducao.position.set(0, elevacaoPlataforma, POS_Z_PLATAFORMA);
-
-        const baseAluminio = new THREE.Mesh(
-            new THREE.BoxGeometry(0.75, 0.024, 1.00),
-            new THREE.MeshStandardMaterial({ color: 0x383e4a, metalness: 0.75, roughness: 0.3 })
+        const deckTx = new THREE.Mesh(
+            new THREE.BoxGeometry(0.66, 0.028, 0.92),
+            new THREE.MeshStandardMaterial({ color: 0x646b77, metalness: 0.5, roughness: 0.4 })
         );
-        baseAluminio.position.y = -0.012;
-        baseAluminio.castShadow = true;
-        baseAluminio.receiveShadow = true;
-        plataformaInducao.add(baseAluminio);
+        deckTx.position.y = -0.005;
+        deckTx.receiveShadow = true;
+        plataformaFixa.add(deckTx);
 
-        const carcacaSuperior = new THREE.Mesh(
-            new THREE.BoxGeometry(0.71, 0.026, 0.96),
-            new THREE.MeshStandardMaterial({ color: 0x171a21, metalness: 0.25, roughness: 0.55 })
+        // Disco e 16 barras radiais de ferrite
+        const discoFerrite = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.265, 0.265, 0.004, 48),
+            new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.6 })
         );
-        carcacaSuperior.position.y = 0.012;
-        carcacaSuperior.castShadow = true;
-        carcacaSuperior.receiveShadow = true;
-        plataformaInducao.add(carcacaSuperior);
+        discoFerrite.position.y = 0.011;
+        plataformaFixa.add(discoFerrite);
 
-        const cavidadeBobina = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.28, 0.28, 0.004, 40),
-            new THREE.MeshStandardMaterial({ color: 0x0d0f14, roughness: 0.7 })
-        );
-        cavidadeBobina.position.y = 0.025;
-        plataformaInducao.add(cavidadeBobina);
-
-        const ferriteMat = new THREE.MeshStandardMaterial({ color: 0x2a2e37, metalness: 0.5, roughness: 0.4 });
-        for (let a = 0; a < 6; a++) {
-            const barraFerrite = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.005, 0.50), ferriteMat);
-            barraFerrite.rotation.y = (a * Math.PI) / 6;
-            barraFerrite.position.y = 0.027;
-            plataformaInducao.add(barraFerrite);
+        const barraFerriteMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.6, roughness: 0.35 });
+        for (let i = 0; i < 16; i++) {
+            const ang = (i * Math.PI * 2) / 16;
+            const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.005, 0.20), barraFerriteMat);
+            spoke.position.set(Math.sin(ang) * 0.145, 0.013, Math.cos(ang) * 0.145);
+            spoke.rotation.y = ang;
+            plataformaFixa.add(spoke);
         }
 
-        const bobinaMat = new THREE.MeshStandardMaterial({
-            color: 0xc87533,
-            emissive: 0x000000,
-            metalness: 0.88,
-            roughness: 0.22
-        });
+        // Bobina circular de 5 espiras de cobre
+        const bobinaTxMat = new THREE.MeshStandardMaterial({ color: 0xd99b52, metalness: 0.85, roughness: 0.22 });
         [0.08, 0.12, 0.16, 0.20, 0.24].forEach((raio) => {
-            const espira = new THREE.Mesh(new THREE.TorusGeometry(raio, 0.008, 12, 48), bobinaMat);
+            const espira = new THREE.Mesh(new THREE.TorusGeometry(raio, 0.0075, 12, 48), bobinaTxMat);
             espira.rotation.x = Math.PI / 2;
-            espira.position.y = 0.031;
-            plataformaInducao.add(espira);
+            espira.position.y = 0.019;
+            plataformaFixa.add(espira);
         });
 
-        const tampaVidro = new THREE.Mesh(
-            new THREE.CylinderGeometry(0.285, 0.285, 0.004, 40),
+        // Tampa translúcida
+        const tampaTranslucida = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.275, 0.275, 0.006, 48),
             new THREE.MeshStandardMaterial({
-                color: 0x88ccff,
+                color: 0xcbd5e1,
                 transparent: true,
                 opacity: 0.22,
-                metalness: 0.1,
-                roughness: 0.1
+                roughness: 0.2
             })
         );
-        tampaVidro.position.y = 0.038;
-        plataformaInducao.add(tampaVidro);
+        tampaTranslucida.position.y = 0.024;
+        plataformaFixa.add(tampaTranslucida);
 
-        // ============================================================
-        // DOIS LEDS DEDICADOS NA PLATAFORMA: VERMELHO (NÃO CARREGANDO) E AZUL (CARREGANDO)
-        // ============================================================
-        const ledVermelhoPlatMat = new THREE.MeshStandardMaterial({
-            color: 0xff1a1a,
-            emissive: 0xff0000,
-            emissiveIntensity: 1.4,
+        // LEDs Vermelho e Azul do Módulo Indutor
+        const ledVermelhoMat = new THREE.MeshStandardMaterial({
+            color: 0xff3b3b,
+            emissive: 0xff1e1e,
+            emissiveIntensity: 1.8,
             roughness: 0.2
         });
-        const ledAzulPlatMat = new THREE.MeshStandardMaterial({
-            color: 0x0a1c38,
+
+        const ledAzulMat = new THREE.MeshStandardMaterial({
+            color: 0x1e3a5f,
             emissive: 0x000000,
-            emissiveIntensity: 1.5,
+            emissiveIntensity: 0.0,
             roughness: 0.2
         });
 
-        // LED Vermelho físico (lado esquerdo da base + barra esquerda)
-        const suporteLedV = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.026, 0.012, 20), new THREE.MeshStandardMaterial({ color: 0x22252b, metalness: 0.7 }));
-        suporteLedV.position.set(-0.24, 0.027, 0.43);
-        const domoLedVermelho = new THREE.Mesh(new THREE.SphereGeometry(0.018, 20, 16), ledVermelhoPlatMat);
-        domoLedVermelho.position.set(-0.24, 0.032, 0.43);
-        const barraLedVermelha = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.009, 0.80), ledVermelhoPlatMat);
-        barraLedVermelha.position.set(-0.335, 0.026, 0);
-        plataformaInducao.add(suporteLedV, domoLedVermelho, barraLedVermelha);
+        const barraLedVermelha = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.008, 0.72), ledVermelhoMat);
+        barraLedVermelha.position.set(-0.29, 0.012, -0.04);
+        const ledDomoVermelho = new THREE.Mesh(new THREE.SphereGeometry(0.018, 16, 16), ledVermelhoMat);
+        ledDomoVermelho.position.set(-0.22, 0.012, 0.39);
 
-        // LED Azul físico (lado direito da base + barra direita)
-        const suporteLedA = new THREE.Mesh(new THREE.CylinderGeometry(0.024, 0.026, 0.012, 20), new THREE.MeshStandardMaterial({ color: 0x22252b, metalness: 0.7 }));
-        suporteLedA.position.set(0.24, 0.027, 0.43);
-        const domoLedAzul = new THREE.Mesh(new THREE.SphereGeometry(0.018, 20, 16), ledAzulPlatMat);
-        domoLedAzul.position.set(0.24, 0.032, 0.43);
-        const barraLedAzul = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.009, 0.80), ledAzulPlatMat);
-        barraLedAzul.position.set(0.335, 0.026, 0);
-        plataformaInducao.add(suporteLedA, domoLedAzul, barraLedAzul);
+        const barraLedAzul = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.008, 0.72), ledAzulMat);
+        barraLedAzul.position.set(0.29, 0.012, -0.04);
+        const ledDomoAzul = new THREE.Mesh(new THREE.SphereGeometry(0.018, 16, 16), ledAzulMat);
+        ledDomoAzul.position.set(0.22, 0.012, 0.39);
 
-        function atualizarLedsPlataforma(carregando) {
-            const uiLeds = document.getElementById('leds-val');
-            if (carregando) {
-                // Vermelho OFF, Azul ON
-                ledVermelhoPlatMat.color.setHex(0x3a0c0c);
-                ledVermelhoPlatMat.emissive.setHex(0x000000);
-                ledAzulPlatMat.color.setHex(0x0099ff);
-                ledAzulPlatMat.emissive.setHex(0x0066ff);
-                uiLeds.innerText = "AZUL (Carregando)";
-                uiLeds.style.color = "#0099ff";
+        plataformaFixa.add(barraLedVermelha, ledDomoVermelho, barraLedAzul, ledDomoAzul);
+
+        // Zona visual no piso
+        const zonaPisoMat = new THREE.MeshBasicMaterial({
+            color: 0xff4d4d,
+            transparent: true,
+            opacity: 0.18,
+            side: THREE.DoubleSide
+        });
+        const tapeteZona = new THREE.Mesh(new THREE.PlaneGeometry(1.35, 1.75), zonaPisoMat);
+        tapeteZona.rotation.x = -Math.PI / 2;
+        tapeteZona.position.y = -0.018;
+        plataformaFixa.add(tapeteZona);
+
+        scene.add(plataformaFixa);
+
+        function atualizarLEDsModuloIndutor(conectado, corZonaPisoHex) {
+            zonaPisoMat.color.setHex(corZonaPisoHex);
+            const elLedHud = document.getElementById("led-module-status");
+
+            if (conectado) {
+                ledAzulMat.color.setHex(0x00a8ff);
+                ledAzulMat.emissive.setHex(0x0088ff);
+                ledAzulMat.emissiveIntensity = 1.9;
+
+                ledVermelhoMat.color.setHex(0x4a1c1c);
+                ledVermelhoMat.emissive.setHex(0x000000);
+                ledVermelhoMat.emissiveIntensity = 0.0;
+
+                elLedHud.innerText = "LED Azul (Conectado)";
+                elLedHud.className = "status-pill pill-blue";
             } else {
-                // Vermelho ON, Azul OFF
-                ledVermelhoPlatMat.color.setHex(0xff1a1a);
-                ledVermelhoPlatMat.emissive.setHex(0xff0000);
-                ledAzulPlatMat.color.setHex(0x0a1c38);
-                ledAzulPlatMat.emissive.setHex(0x000000);
-                uiLeds.innerText = "VERMELHO (Não Carregando)";
-                uiLeds.style.color = "#ff3333";
+                ledVermelhoMat.color.setHex(0xff3b3b);
+                ledVermelhoMat.emissive.setHex(0xff1e1e);
+                ledVermelhoMat.emissiveIntensity = 1.9;
+
+                ledAzulMat.color.setHex(0x1e3a5f);
+                ledAzulMat.emissive.setHex(0x000000);
+                ledAzulMat.emissiveIntensity = 0.0;
+
+                elLedHud.innerText = "LED Vermelho (Desconectado)";
+                elLedHud.className = "status-pill pill-off";
             }
         }
 
-        const ondasMagneticas = [];
-        for (let i = 0; i < 3; i++) {
-            const onda = new THREE.Mesh(
-                new THREE.RingGeometry(0.15, 0.185, 36),
-                new THREE.MeshBasicMaterial({ color: 0x0099ff, side: THREE.DoubleSide, transparent: true, opacity: 0.0 })
+        // ============================================================
+        // 5. RECEPTOR PASSIVO DETALHADO SOB O VEÍCULO
+        // ============================================================
+        function criarEspiraRetangularArredondada(larguraExt, compExt, espessuraFio, raioCanto, altura) {
+            function criarPathRetangulo(w, h, r) {
+                const path = new THREE.Path();
+                const hw = w / 2;
+                const hh = h / 2;
+                const rc = Math.min(r, hw * 0.45, hh * 0.45);
+                path.moveTo(-hw + rc, -hh);
+                path.lineTo(hw - rc, -hh);
+                path.quadraticCurveTo(hw, -hh, hw, -hh + rc);
+                path.lineTo(hw, hh - rc);
+                path.quadraticCurveTo(hw, hh, hw - rc, hh);
+                path.lineTo(-hw + rc, hh);
+                path.quadraticCurveTo(-hw, hh, -hw, hh - rc);
+                path.lineTo(-hw, -hh + rc);
+                path.quadraticCurveTo(-hw, -hh, -hw + rc, -hh);
+                return path;
+            }
+
+            const shape = new THREE.Shape();
+            const hw = larguraExt / 2;
+            const hh = compExt / 2;
+            const rc = Math.min(raioCanto, hw * 0.45, hh * 0.45);
+            shape.moveTo(-hw + rc, -hh);
+            shape.lineTo(hw - rc, -hh);
+            shape.quadraticCurveTo(hw, -hh, hw, -hh + rc);
+            shape.lineTo(hw, hh - rc);
+            shape.quadraticCurveTo(hw, hh, hw - rc, hh);
+            shape.lineTo(-hw + rc, hh);
+            shape.quadraticCurveTo(-hw, hh, -hw, hh - rc);
+            shape.lineTo(-hw, -hh + rc);
+            shape.quadraticCurveTo(-hw, -hh, -hw + rc, -hh);
+
+            const hole = criarPathRetangulo(
+                larguraExt - espessuraFio * 2,
+                compExt - espessuraFio * 2,
+                Math.max(0.006, rc - espessuraFio)
             );
-            onda.rotation.x = -Math.PI / 2;
-            onda.position.y = 0.045 + (i * 0.03);
-            plataformaInducao.add(onda);
-            ondasMagneticas.push(onda);
+            shape.holes.push(hole);
+
+            const geom = new THREE.ExtrudeGeometry(shape, {
+                depth: altura,
+                bevelEnabled: true,
+                bevelSegments: 2,
+                steps: 1,
+                bevelSize: 0.0015,
+                bevelThickness: 0.0015
+            });
+            geom.rotateX(Math.PI / 2);
+            return geom;
         }
 
-        scene.add(plataformaInducao);
-
-        // ============================================================
-        // MÓDULO RECEPTOR WPT ACOPLADO DIRETAMENTE AO ASSOALHO DO VEÍCULO
-        // (Suporte de Fixação + Blindagem + Ferrite Preto + Bobina Retangular + PCB Verde)
-        // ============================================================
-        const receptorBobinaMat = new THREE.MeshStandardMaterial({
-            color: 0xd97b38,
-            emissive: 0x000000,
-            metalness: 0.85,
-            roughness: 0.22
-        });
-
-        function criarShapeRetangularArredondado(larg, comp, raio) {
-            const s = new THREE.Shape();
-            const hw = larg / 2 - raio;
-            const hl = comp / 2 - raio;
-            s.absarc(hw, hl, raio, 0, Math.PI / 2, false);
-            s.absarc(-hw, hl, raio, Math.PI / 2, Math.PI, false);
-            s.absarc(-hw, -hl, raio, Math.PI, Math.PI * 1.5, false);
-            s.absarc(hw, -hl, raio, Math.PI * 1.5, Math.PI * 2, false);
-            s.closePath();
-            return s;
-        }
-
-        function criarReceptorInducaoEV() {
+        function criarReceptorPassivoEV() {
             const rxGroup = new THREE.Group();
 
-            // 0. Carcaça/Berço de acoplamento estrutural que se funde ao subassoalho do veículo (y = 0 é a linha do chassi)
-            const bercoChassi = new THREE.Mesh(
-                new THREE.BoxGeometry(0.62, 0.026, 1.04),
-                new THREE.MeshStandardMaterial({ color: 0x1c2026, roughness: 0.65, metalness: 0.35 })
-            );
-            bercoChassi.position.set(0, 0.008, 0.08);
-            rxGroup.add(bercoChassi);
+            // 1. Placa de blindagem em alumínio escovado (0.56 x 0.98 m)
+            const blindagemMat = new THREE.MeshStandardMaterial({
+                color: 0x475569,
+                metalness: 0.65,
+                roughness: 0.35
+            });
+            const blindagem = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.016, 0.98), blindagemMat);
+            blindagem.position.set(0, 0.008, 0);
+            rxGroup.add(blindagem);
 
-            // 4 Abas de fixação com parafusos metálicos prendendo o módulo ao assoalho
-            const abaMat = new THREE.MeshStandardMaterial({ color: 0x454d59, metalness: 0.8, roughness: 0.25 });
-            const parafusoMat = new THREE.MeshStandardMaterial({ color: 0xd0d7de, metalness: 0.9, roughness: 0.2 });
-            [[-0.33, -0.38], [0.33, -0.38], [-0.33, 0.54], [0.33, 0.54]].forEach(([ax, az]) => {
-                const aba = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.010, 0.08), abaMat);
-                aba.position.set(ax, -0.002, az);
-                const parafuso = new THREE.Mesh(new THREE.CylinderGeometry(0.010, 0.010, 0.008, 6), parafusoMat);
-                parafuso.position.set(ax, -0.008, az);
+            // 4 Abas laterais de fixação parafusadas
+            const parafusoMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.85, roughness: 0.25 });
+            [[-0.31, -0.40], [0.31, -0.40], [-0.31, 0.40], [0.31, 0.40]].forEach(([ax, az]) => {
+                const aba = new THREE.Mesh(new THREE.BoxGeometry(0.065, 0.012, 0.075), blindagemMat);
+                aba.position.set(ax, 0.008, az);
+                const parafuso = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.018, 12), parafusoMat);
+                parafuso.position.set(ax + (ax > 0 ? 0.008 : -0.008), 0.006, az);
                 rxGroup.add(aba, parafuso);
             });
 
-            // 1. Placa de blindagem EMI em alumínio (colada sob o berço estrutural)
-            const blindagemAlu = new THREE.Mesh(
-                new THREE.BoxGeometry(0.56, 0.008, 0.98),
-                new THREE.MeshStandardMaterial({ color: 0x6b7687, metalness: 0.82, roughness: 0.25 })
-            );
-            blindagemAlu.position.set(0, -0.008, 0.08);
-            rxGroup.add(blindagemAlu);
+            // 2. Lâmina preta de ferrite (0.46 x 0.58 m)
+            const ferriteMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.55 });
+            const ferrite = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.010, 0.58), ferriteMat);
+            ferrite.position.set(0, -0.003, -0.11);
+            rxGroup.add(ferrite);
 
-            // 2. Folha retangular preta de Ferrite (colada sob a blindagem de alumínio)
-            const ferriteShape = criarShapeRetangularArredondado(0.46, 0.58, 0.055);
-            const ferriteGeo = new THREE.ExtrudeGeometry(ferriteShape, { depth: 0.008, bevelEnabled: false });
-            const ferriteMesh = new THREE.Mesh(
-                ferriteGeo,
-                new THREE.MeshStandardMaterial({ color: 0x0e1014, roughness: 0.6, metalness: 0.15 })
-            );
-            ferriteMesh.rotation.x = Math.PI / 2;
-            ferriteMesh.position.set(0, -0.011, -0.08);
-            rxGroup.add(ferriteMesh);
-
-            // 3. Enrolamento retangular plano de cobre (assentado diretamente sobre o ferrite preto)
-            [
-                [0.40, 0.52, 0.045, 0.355, 0.475, 0.038],
-                [0.345, 0.465, 0.036, 0.30, 0.42, 0.030],
-                [0.29, 0.41, 0.028, 0.245, 0.365, 0.022],
-                [0.235, 0.355, 0.020, 0.195, 0.315, 0.015]
-            ].forEach(([wOut, lOut, rOut, wIn, lIn, rIn]) => {
-                const rectCoil = criarShapeRetangularArredondado(wOut, lOut, rOut);
-                rectCoil.holes.push(criarShapeRetangularArredondado(wIn, lIn, rIn));
-                const geoEspira = new THREE.ExtrudeGeometry(rectCoil, { depth: 0.009, bevelEnabled: false });
-                const meshEspira = new THREE.Mesh(geoEspira, receptorBobinaMat);
-                meshEspira.rotation.x = Math.PI / 2;
-                meshEspira.position.set(0, -0.018, -0.08);
-                rxGroup.add(meshEspira);
+            // 3. Bobina retangular planar de cobre (4 espiras com cantos arredondados)
+            const cobreRxMat = new THREE.MeshStandardMaterial({
+                color: 0xb87333,
+                metalness: 0.85,
+                roughness: 0.24
             });
 
-            // 4. Dois condutores de cobre prolongados ligando a bobina retangular à PCB verde
-            [-0.038, 0.038].forEach((wx) => {
+            const espirasConfig = [
+                { w: 0.40, l: 0.51, r: 0.032 },
+                { w: 0.355, l: 0.465, r: 0.026 },
+                { w: 0.31, l: 0.42, r: 0.020 },
+                { w: 0.265, l: 0.375, r: 0.015 }
+            ];
+
+            espirasConfig.forEach((cfg) => {
+                const geom = criarEspiraRetangularArredondada(cfg.w, cfg.l, 0.013, cfg.r, 0.007);
+                const mesh = new THREE.Mesh(geom, cobreRxMat);
+                mesh.position.set(0, -0.008, -0.11);
+                rxGroup.add(mesh);
+            });
+
+            // 4. Dois fios prolongados de cobre ligando a bobina à PCB verde
+            [-0.042, 0.042].forEach((fx) => {
                 const curvaFio = new THREE.CatmullRomCurve3([
-                    new THREE.Vector3(wx, -0.022, 0.17),
-                    new THREE.Vector3(wx * 1.12, -0.021, 0.26),
-                    new THREE.Vector3(wx * 0.9, -0.020, 0.35)
+                    new THREE.Vector3(fx, -0.011, 0.145),
+                    new THREE.Vector3(fx * 1.18, -0.012, 0.195),
+                    new THREE.Vector3(fx, -0.011, 0.245)
                 ]);
-                const fioGeo = new THREE.TubeGeometry(curvaFio, 16, 0.0045, 8, false);
-                const fioMesh = new THREE.Mesh(
-                    fioGeo,
-                    new THREE.MeshStandardMaterial({ color: 0xd97b38, metalness: 0.88, roughness: 0.2 })
-                );
+                const fioGeom = new THREE.TubeGeometry(curvaFio, 12, 0.004, 8, false);
+                const fioMesh = new THREE.Mesh(fioGeom, cobreRxMat);
                 rxGroup.add(fioMesh);
             });
 
-            // 5. Base isolante da PCB verde + Placa PCB retificadora VERDE
-            const baseIsolantePcb = new THREE.Mesh(
-                new THREE.BoxGeometry(0.25, 0.006, 0.23),
-                new THREE.MeshStandardMaterial({ color: 0x16181d, roughness: 0.7 })
+            // 5. PCB Retificadora Verde Detalhada (0.24 x 0.22 m)
+            const pcbCanvas = document.createElement("canvas");
+            pcbCanvas.width = 256; pcbCanvas.height = 256;
+            const pctx = pcbCanvas.getContext("2d");
+            pctx.fillStyle = "#16a34a";
+            pctx.fillRect(0, 0, 256, 256);
+            pctx.strokeStyle = "#dcfce7";
+            pctx.lineWidth = 5;
+            pctx.strokeRect(8, 8, 240, 240);
+
+            pctx.fillStyle = "#e2e8f0";
+            pctx.fillRect(26, 26, 24, 24);
+            pctx.fillRect(206, 26, 24, 24);
+
+            pctx.fillStyle = "#ffffff";
+            pctx.font = "bold 16px monospace";
+            pctx.textAlign = "center";
+            pctx.fillText("WPT-RX 85kHz", 128, 34);
+            pctx.fillText("-  BAT  +", 128, 238);
+
+            const pcbTex = new THREE.CanvasTexture(pcbCanvas);
+            const pcbVerdeBaseMat = new THREE.MeshStandardMaterial({ color: 0x16a34a, roughness: 0.4 });
+            const pcbVerdeBottomMat = new THREE.MeshStandardMaterial({ map: pcbTex, roughness: 0.4 });
+
+            const pcbVerde = new THREE.Mesh(
+                new THREE.BoxGeometry(0.24, 0.008, 0.22),
+                [pcbVerdeBaseMat, pcbVerdeBaseMat, pcbVerdeBaseMat, pcbVerdeBottomMat, pcbVerdeBaseMat, pcbVerdeBaseMat]
             );
-            baseIsolantePcb.position.set(0, -0.014, 0.45);
-            rxGroup.add(baseIsolantePcb);
+            pcbVerde.position.set(0, -0.004, 0.355);
+            rxGroup.add(pcbVerde);
 
-            const pcbGreenCanvas = document.createElement('canvas');
-            pcbGreenCanvas.width = 256; pcbGreenCanvas.height = 256;
-            const gctx = pcbGreenCanvas.getContext('2d');
-            gctx.fillStyle = '#0d7a38';
-            gctx.fillRect(0, 0, 256, 256);
-            gctx.strokeStyle = '#7be39e';
-            gctx.lineWidth = 4;
-            gctx.strokeRect(6, 6, 244, 244);
+            // CI central + 6 componentes SMD laterais
+            const ciMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.35 });
+            const ciCentral = new THREE.Mesh(new THREE.BoxGeometry(0.056, 0.006, 0.056), ciMat);
+            ciCentral.position.set(0, -0.010, 0.355);
+            rxGroup.add(ciCentral);
 
-            gctx.fillStyle = '#ffffff';
-            gctx.font = 'bold 26px monospace';
-            gctx.fillText('+', 36, 226);
-            gctx.fillText('-', 198, 226);
-            gctx.font = 'bold 20px monospace';
-            gctx.fillText('BAT', 108, 232);
-            gctx.font = 'bold 16px monospace';
-            gctx.fillText('WPT-RX 85kHz', 68, 36);
-
-            gctx.fillStyle = '#d8e0e8';
-            gctx.fillRect(72, 12, 26, 22);
-            gctx.fillRect(158, 12, 26, 22);
-            gctx.fillRect(28, 180, 26, 22);
-            gctx.fillRect(202, 180, 26, 22);
-            const pcbGreenTex = new THREE.CanvasTexture(pcbGreenCanvas);
-
-            const pcbGreenEdgeMat = new THREE.MeshStandardMaterial({ color: 0x0d7a38, roughness: 0.45 });
-            const pcbGreenFaceMat = new THREE.MeshStandardMaterial({ map: pcbGreenTex, roughness: 0.4 });
-            const pcbGreenMesh = new THREE.Mesh(
-                new THREE.BoxGeometry(0.24, 0.007, 0.22),
-                [pcbGreenEdgeMat, pcbGreenEdgeMat, pcbGreenEdgeMat, pcbGreenFaceMat, pcbGreenEdgeMat, pcbGreenEdgeMat]
-            );
-            pcbGreenMesh.position.set(0, -0.019, 0.45);
-            rxGroup.add(pcbGreenMesh);
-
-            const icChip = new THREE.Mesh(
-                new THREE.BoxGeometry(0.052, 0.007, 0.052),
-                new THREE.MeshStandardMaterial({ color: 0x111216, roughness: 0.3 })
-            );
-            icChip.position.set(0, -0.024, 0.45);
-            rxGroup.add(icChip);
-
-            const capSmdMat = new THREE.MeshStandardMaterial({ color: 0xb8864b, metalness: 0.6, roughness: 0.3 });
-            const resSmdMat = new THREE.MeshStandardMaterial({ color: 0x18191c, roughness: 0.4 });
-            [[-0.065, 0.42], [-0.065, 0.46], [-0.065, 0.50], [0.065, 0.42], [0.065, 0.46]].forEach(([sx, sz]) => {
-                const cap = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.006, 0.014), capSmdMat);
-                cap.position.set(sx, -0.023, sz);
-                rxGroup.add(cap);
-            });
-            [[0, 0.39], [0.065, 0.50]].forEach(([rx, rz]) => {
-                const res = new THREE.Mesh(new THREE.BoxGeometry(0.024, 0.006, 0.014), resSmdMat);
-                res.position.set(rx, -0.023, rz);
-                rxGroup.add(res);
+            const smdMat = new THREE.MeshStandardMaterial({ color: 0xb45309, metalness: 0.5, roughness: 0.35 });
+            [-0.075, 0.075].forEach((sx) => {
+                [0.305, 0.355, 0.405].forEach((sz) => {
+                    const smd = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.005, 0.016), smdMat);
+                    smd.position.set(sx, -0.010, sz);
+                    rxGroup.add(smd);
+                });
             });
 
-            // Cabos de saída (+ vermelho / - preto) entrando diretamente no pack de baterias superior
-            const caboPos = new THREE.Mesh(
-                new THREE.CylinderGeometry(0.005, 0.005, 0.12, 8),
-                new THREE.MeshStandardMaterial({ color: 0xd92626, roughness: 0.4 })
+            // 6. Cabos de saída BAT (- Preto à esquerda, + Vermelho à direita)
+            const caboPreto = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.006, 0.006, 0.095, 12),
+                new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.6 })
             );
-            caboPos.rotation.x = Math.PI / 2.6;
-            caboPos.position.set(-0.075, -0.006, 0.59);
-            rxGroup.add(caboPos);
+            caboPreto.rotation.x = Math.PI / 2;
+            caboPreto.position.set(-0.072, -0.006, 0.505);
 
-            const caboNeg = new THREE.Mesh(
-                new THREE.CylinderGeometry(0.005, 0.005, 0.12, 8),
-                new THREE.MeshStandardMaterial({ color: 0x141414, roughness: 0.5 })
+            const caboVermelho = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.006, 0.006, 0.095, 12),
+                new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.5 })
             );
-            caboNeg.rotation.x = Math.PI / 2.6;
-            caboNeg.position.set(0.075, -0.006, 0.59);
-            rxGroup.add(caboNeg);
+            caboVermelho.rotation.x = Math.PI / 2;
+            caboVermelho.position.set(0.072, -0.006, 0.505);
+
+            rxGroup.add(caboPreto, caboVermelho);
 
             return rxGroup;
         }
 
-        // --- VEÍCULO: BYD DOLPHIN MINI ---
-        const carGroup = new THREE.Group(); carGroup.position.set(0, 0, 7.0);
-        const receptorEV = criarReceptorInducaoEV();
+        const carGroup = new THREE.Group();
+        carGroup.position.set(0, 0, POS_Z_PLATAFORMA + (distance - 0.45) * 1.1);
+
+        const receptorEV = criarReceptorPassivoEV();
         receptorEV.position.set(0, 0.138, 0);
         carGroup.add(receptorEV);
 
         const gltfLoader = new THREE.GLTFLoader();
-        gltfLoader.load('scene.gltf', (gltf) => {
-            const carModel = gltf.scene;
-            const box = new THREE.Box3().setFromObject(carModel);
-            const size = box.getSize(new THREE.Vector3());
-            const center = box.getCenter(new THREE.Vector3());
-            carModel.position.x += (carModel.position.x - center.x);
-            carModel.position.y += (carModel.position.y - center.y);
-            carModel.position.z += (carModel.position.z - center.z);
-            carModel.scale.set(3.4/size.z, 3.4/size.z, 3.4/size.z);
-            carModel.traverse((node) => { if (node.isMesh) node.castShadow = true; });
-            carGroup.add(carModel);
+        gltfLoader.load(
+            "scene.gltf",
+            (gltf) => {
+                document.getElementById("model-loading").style.display = "none";
+                const carModel = gltf.scene;
+                const box = new THREE.Box3().setFromObject(carModel);
+                const size = box.getSize(new THREE.Vector3());
+                const center = box.getCenter(new THREE.Vector3());
+                carModel.position.x += (carModel.position.x - center.x);
+                carModel.position.y += (carModel.position.y - center.y);
+                carModel.position.z += (carModel.position.z - center.z);
+                carModel.scale.set(3.4 / size.z, 3.4 / size.z, 3.4 / size.z);
+                carModel.traverse((node) => { if (node.isMesh) node.castShadow = true; });
+                carGroup.add(carModel);
 
-            carModel.updateMatrixWorld(true);
-            let minBellyY = Infinity;
-            const vTemp = new THREE.Vector3();
-            carModel.traverse((node) => {
-                if (node.isMesh && node.geometry && node.geometry.attributes.position) {
-                    const pos = node.geometry.attributes.position;
-                    for (let i = 0; i < pos.count; i++) {
-                        vTemp.fromBufferAttribute(pos, i).applyMatrix4(node.matrixWorld);
-                        if (Math.abs(vTemp.x) < 0.45 && Math.abs(vTemp.z) < 0.75) {
-                            if (vTemp.y < minBellyY) minBellyY = vTemp.y;
+                carModel.updateMatrixWorld(true);
+                let minBellyY = Infinity;
+                const vTemp = new THREE.Vector3();
+                carModel.traverse((node) => {
+                    if (node.isMesh && node.geometry && node.geometry.attributes.position) {
+                        const pos = node.geometry.attributes.position;
+                        for (let i = 0; i < pos.count; i++) {
+                            vTemp.fromBufferAttribute(pos, i).applyMatrix4(node.matrixWorld);
+                            if (Math.abs(vTemp.x) < 0.45 && Math.abs(vTemp.z) < 0.75 && vTemp.y < minBellyY) {
+                                minBellyY = vTemp.y;
+                            }
                         }
                     }
-                }
-            });
-
-            if (minBellyY < Infinity) {
-                // Posiciona y=0 do receptor exatamente na face externa do assoalho (zero vão/flutuação)
-                receptorEV.position.y = minBellyY;
-                maxElevacao = Math.max(0.045, minBellyY - 0.068);
+                });
+                if (minBellyY < Infinity) receptorEV.position.y = minBellyY;
+            },
+            undefined,
+            () => {
+                document.getElementById("model-loading").style.display = "none";
+                const chassi = new THREE.Mesh(
+                    new THREE.BoxGeometry(1.7, 0.65, 3.4),
+                    new THREE.MeshStandardMaterial({ color: 0x0284c7, metalness: 0.4, roughness: 0.3 })
+                );
+                chassi.position.y = 0.52;
+                chassi.castShadow = true;
+                const cabine = new THREE.Mesh(
+                    new THREE.BoxGeometry(1.5, 0.65, 1.8),
+                    new THREE.MeshStandardMaterial({ color: 0x0f172a, transparent: true, opacity: 0.85 })
+                );
+                cabine.position.set(0, 1.12, -0.2);
+                const rodaGeo = new THREE.CylinderGeometry(0.28, 0.28, 0.25, 24);
+                rodaGeo.rotateZ(Math.PI / 2);
+                const rodaMat = new THREE.MeshStandardMaterial({ color: 0x151515 });
+                [[-0.85, 1], [0.85, 1], [-0.85, -1], [0.85, -1]].forEach(([rx, rz]) => {
+                    const r = new THREE.Mesh(rodaGeo, rodaMat);
+                    r.position.set(rx, 0.28, rz);
+                    carGroup.add(r);
+                });
+                carGroup.add(chassi, cabine);
+                receptorEV.position.y = 0.195;
             }
-        }, undefined, (e) => {
-            const chassi = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.65, 3.4), new THREE.MeshStandardMaterial({ color: 0x00f2ff, metalness: 0.5, roughness: 0.2 })); chassi.position.y = 0.52; chassi.castShadow = true;
-            const cabine = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.65, 1.8), new THREE.MeshStandardMaterial({ color: 0x111111, transparent: true, opacity: 0.85 })); cabine.position.set(0, 1.12, -0.2); carGroup.add(chassi, cabine);
-            const rodaGeo = new THREE.CylinderGeometry(0.28, 0.28, 0.25, 24); rodaGeo.rotateZ(Math.PI/2); const rodaMat = new THREE.MeshStandardMaterial({color: 0x151515, roughness: 0.8});
-            const r1 = new THREE.Mesh(rodaGeo, rodaMat); r1.position.set(-0.85, 0.28, 1); const r2 = r1.clone(); r2.position.x = 0.85; const r3 = r1.clone(); r3.position.z = -1; const r4 = r2.clone(); r4.position.z = -1;
-            carGroup.add(r1, r2, r3, r4);
-            receptorEV.position.y = 0.195;
-            maxElevacao = 0.115;
-        });
-
+        );
         scene.add(carGroup);
 
-        // --- LÓGICA DE CONTROLE E PROTOCOLO DE FALHA/REARME ---
-        let state = "IDLE"; let distance = 5.0; let battery = 15;
-        const uiDist = document.getElementById('dist-val'); const uiAct = document.getElementById('act-val');
-        const uiMag = document.getElementById('mag-val'); const uiStat = document.getElementById('main-status');
-        const uiBatTxt = document.getElementById('bat-perc'); const uiBatBar = document.getElementById('battery-level');
-        const btnActuator = document.getElementById('actuator-btn');
-        const btnRecover = document.getElementById('recover-btn');
+        // ============================================================
+        // 6. LÓGICA DE POSICIONAMENTO (ESTADOS 1, 2 E 3) E MQTT
+        // ============================================================
+        function processarDistancia(valorRecebido) {
+            const d = parseFloat(valorRecebido);
+            if (isNaN(d)) return;
 
-        function atualizarEficienciaUI() {
-            document.getElementById('alt-val').innerText = elevacaoAlvo.toFixed(2) + " m";
-            const faixa = Math.max(0.01, maxElevacao - minElevacao);
-            const prog = Math.min(1, Math.max(0, (elevacaoAlvo - minElevacao) / faixa));
-            const eff = Math.round(78 + prog * 20);
-            document.getElementById('eff-val').innerText = eff + "%";
-        }
+            distance = Math.max(0.10, d);
+            document.getElementById("dist-val").innerText = distance.toFixed(2) + " m";
+            document.getElementById("sim-dist-slider").value = Math.min(3.50, Math.max(0.40, distance)).toFixed(2);
 
-        function alternarVistaSubassoalho() {
-            vistaSubassoalhoAtiva = !vistaSubassoalhoAtiva;
-            const btnCam = document.getElementById('cam-btn');
-            if (vistaSubassoalhoAtiva) {
-                camera.position.set(1.25, 0.08, carGroup.position.z + 0.55);
-                controls.target.set(0, receptorEV.position.y - 0.02, carGroup.position.z + 0.1);
-                btnCam.innerText = "Vista Geral Posto";
+            carGroup.position.z = POS_Z_PLATAFORMA + (distance - 0.45) * 1.1;
+            if (vistaAcoplamentoAtiva) {
+                controls.target.set(0, receptorEV.position.y - 0.02, carGroup.position.z);
+            }
+
+            const elDet = document.getElementById("det-val");
+            const elPos = document.getElementById("pos-val");
+            const elVal = document.getElementById("val-status");
+            const elStateTitle = document.getElementById("state-title");
+            const elStateMsg = document.getElementById("state-message");
+            const elStateBox = document.getElementById("state-box");
+            const elAlert = document.getElementById("alignment-alert");
+
+            // Rearma a notificação apenas quando o veículo realmente se afasta da vaga (> 0,60 m)
+            if (distance > DIST_SAIDA_ZONA) {
+                notificacaoJaEnviada = false;
+                ocultarNotificacaoCanto();
+            }
+
+            if (distance <= DIST_ALINHADO) {
+                // ESTADO 3: VEÍCULO POSICIONADO / CONECTADO (LED AZUL ACESO)
+                elDet.innerText = "SIM";
+                elDet.className = "status-pill pill-ok";
+
+                elPos.innerText = "SIM";
+                elPos.className = "status-pill pill-ok";
+
+                elVal.innerText = "VALIDADA";
+                elVal.className = "status-pill pill-ok";
+
+                elStateTitle.innerText = "VEÍCULO POSICIONADO • POSIÇÃO VALIDADA";
+                elStateTitle.style.color = "#00e676";
+                elStateMsg.innerText = "Aguardando Processo Físico de Carregamento.";
+                elStateBox.style.borderColor = "rgba(0, 230, 118, 0.5)";
+
+                elAlert.innerText = "✅ Veículo corretamente alinhado.";
+                elAlert.style.background = "rgba(0, 230, 118, 0.18)";
+                elAlert.style.borderColor = "rgba(0, 230, 118, 0.55)";
+                elAlert.style.color = "#00e676";
+
+                atualizarLEDsModuloIndutor(true, 0x00e676); // LED Azul ACESO
+                atualizarDisplayTotem("POSICAO VALIDADA", "DIST: " + distance.toFixed(2) + "m", "#00a8ff");
+
+                // Envia a notificação no canto apenas uma única vez ao entrar na posição correta
+                if (!notificacaoJaEnviada) {
+                    notificacaoJaEnviada = true;
+                    mostrarNotificacaoCanto();
+                }
+
+            } else if (distance <= DIST_DETECCAO) {
+                // ESTADO 2: VEÍCULO DETECTADO (DESCONECTADO -> LED VERMELHO ACESO)
+                elDet.innerText = "SIM";
+                elDet.className = "status-pill pill-ok";
+
+                elPos.innerText = "NÃO";
+                elPos.className = "status-pill pill-warn";
+
+                elVal.innerText = "PENDENTE";
+                elVal.className = "status-pill pill-warn";
+
+                elStateTitle.innerText = "VEÍCULO DETECTADO";
+                elStateTitle.style.color = "#ffbb00";
+                elStateMsg.innerText = "Veículo detectado.";
+                elStateBox.style.borderColor = "rgba(255, 187, 0, 0.5)";
+
+                elAlert.innerText = "⚠ Ajuste o posicionamento do veículo.";
+                elAlert.style.background = "rgba(255, 187, 0, 0.18)";
+                elAlert.style.borderColor = "rgba(255, 187, 0, 0.55)";
+                elAlert.style.color = "#ffbb00";
+
+                atualizarLEDsModuloIndutor(false, 0xffbb00); // LED Vermelho ACESO
+                atualizarDisplayTotem("VEICULO DETECTADO", "DIST: " + distance.toFixed(2) + "m", "#ff4d4d");
+
             } else {
-                camera.position.set(11, 7, 13);
-                controls.target.set(0, 1.0, 2);
-                btnCam.innerText = "Vista Acoplamento";
+                // ESTADO 1: AGUARDANDO VEÍCULO (DESCONECTADO -> LED VERMELHO ACESO)
+                elDet.innerText = "NÃO";
+                elDet.className = "status-pill pill-off";
+
+                elPos.innerText = "NÃO";
+                elPos.className = "status-pill pill-off";
+
+                elVal.innerText = "PENDENTE";
+                elVal.className = "status-pill pill-off";
+
+                elStateTitle.innerText = "AGUARDANDO POSICIONAMENTO";
+                elStateTitle.style.color = "#ff4d4d";
+                elStateMsg.innerText = "Aproxime o veículo da área de carregamento.";
+                elStateBox.style.borderColor = "rgba(255, 77, 77, 0.45)";
+
+                elAlert.innerText = "⚠ Ajuste o posicionamento do veículo.";
+                elAlert.style.background = "rgba(255, 77, 77, 0.18)";
+                elAlert.style.borderColor = "rgba(255, 77, 77, 0.5)";
+                elAlert.style.color = "#ff8080";
+
+                atualizarLEDsModuloIndutor(false, 0xff4d4d); // LED Vermelho ACESO
+                atualizarDisplayTotem("AGUARDANDO EV", "DIST: " + distance.toFixed(2) + "m", "#ff4d4d");
             }
         }
 
-        // Eventos MQTT
+        // Conexão MQTT (Recebimento Exclusivo da Distância do HC-SR04)
+        const mqttClient = mqtt.connect(MQTT_BROKER_WSS);
+
         mqttClient.on("connect", () => {
-            mqttClient.subscribe(TOPIC_STATUS);
+            const elMqtt = document.getElementById("mqtt-status");
+            elMqtt.innerText = "Conectado";
+            elMqtt.className = "status-pill pill-ok";
             mqttClient.subscribe(TOPIC_DIST);
-            uiStat.innerText = "Nuvem Conectada. Clique em Iniciar Simulação.";
+            mqttClient.subscribe(TOPIC_STATUS);
+        });
+
+        mqttClient.on("close", () => {
+            const elMqtt = document.getElementById("mqtt-status");
+            elMqtt.innerText = "Desconectado";
+            elMqtt.className = "status-pill pill-off";
         });
 
         mqttClient.on("message", (topic, message) => {
-            if (topic === TOPIC_STATUS && message.toString() === "ONLINE") {
-                uiStat.innerText = "ESP32-S3 Online e Sincronizada!";
+            const payload = message.toString().trim();
+            if (topic === TOPIC_STATUS || topic === TOPIC_DIST) {
+                const elEsp = document.getElementById("esp-status");
+                elEsp.innerText = "Online";
+                elEsp.className = "status-pill pill-ok";
             }
             if (topic === TOPIC_DIST) {
-                const distReal = parseFloat(message.toString());
-                if (!isNaN(distReal) && simulacaoAtiva) {
-                    const distAjustada = Math.min(5.0, Math.max(0.4, distReal));
-                    document.getElementById('sim-dist-slider').value = distAjustada.toFixed(2);
-                    atualizarDistanciaManual(distAjustada);
-                }
+                processarDistancia(payload);
             }
         });
 
-        function enviarComandoESP32(cmd, l1, l2) {
-            if (mqttClient && mqttClient.connected) {
-                mqttClient.publish(TOPIC_CMD, JSON.stringify({ cmd, l1, l2 }));
+        function alternarVistaAcoplamento() {
+            vistaAcoplamentoAtiva = !vistaAcoplamentoAtiva;
+            const btn = document.getElementById("cam-btn");
+            if (vistaAcoplamentoAtiva) {
+                camera.position.set(1.35, 0.12, carGroup.position.z + 0.55);
+                controls.target.set(0, receptorEV.position.y - 0.02, carGroup.position.z);
+                btn.innerText = "Vista Geral do Posto";
+            } else {
+                camera.position.set(10.5, 6.5, 12.5);
+                controls.target.set(0, 0.9, 2.0);
+                btn.innerText = "Vista Acoplamento (Base / Receptor)";
             }
         }
 
-        function iniciar() { 
-            simulacaoAtiva = true; 
-            document.getElementById('start-btn').disabled = true; 
-            atualizarLedsPlataforma(false);
-            uiStat.innerText = "Aproxime o veículo da plataforma no chão.";
-            enviarComandoESP32("IDLE", "SISTEMA ATIVO", "APROXIME O EV");
+        function resetarSimulacao() {
+            notificacaoJaEnviada = false;
+            ocultarNotificacaoCanto();
+            processarDistancia(3.50);
         }
 
-        function atualizarDistanciaManual(valor) {
-            if (!simulacaoAtiva) return;
-            distance = parseFloat(valor);
+        processarDistancia(3.50);
 
-            if (state === "IDLE" || state === "PARKED_WAITING") {
-                carGroup.position.z = POS_Z_PLATAFORMA + (distance - 0.45) * 1.1;
-
-                if (vistaSubassoalhoAtiva) {
-                    controls.target.set(0, receptorEV.position.y - 0.02, carGroup.position.z + 0.1);
-                }
-
-                if (distance <= 0.48) {
-                    state = "PARKED_WAITING";
-                    btnActuator.disabled = false;
-                    uiStat.innerText = "Receptor acoplado alinhado à base! Pronto para indução.";
-                    uiStat.style.color = "#00f2ff";
-                    if (ultimoEstadoEnviado !== "PARKED") {
-                        ultimoEstadoEnviado = "PARKED";
-                        enviarComandoESP32("PARKED", "EV NA PLATAFORMA", "PRONTO P/ INDUCAO");
-                    }
-                } else {
-                    state = "IDLE";
-                    btnActuator.disabled = true;
-                    uiStat.innerText = "Aproximando receptor do EV à plataforma...";
-                    uiStat.style.color = "#ffaa00";
-                    if (ultimoEstadoEnviado !== "IDLE") {
-                        ultimoEstadoEnviado = "IDLE";
-                        enviarComandoESP32("IDLE", "APROXIME O EV", "DIST: " + distance.toFixed(2) + "m");
-                    }
-                }
-            }
-        }
-
-        function iniciarInducao() { 
-            if (state === "PARKED_WAITING") {
-                state = "PLATFORM_RISING"; 
-                btnActuator.disabled = true;
-                btnRecover.disabled = true;
-                if (elevacaoAlvo < maxElevacao) {
-                    elevacaoAlvo = maxElevacao;
-                    atualizarEficienciaUI();
-                }
-                enviarComandoESP32("START", "ALCAPAO ATIVO", "INDUCAO LIGADA");
-            }
-        }
-
-        // PROTOCOLO NÍVEL 1: Parada de Emergência / Interrupção Recuperável (Preserva SoC)
-        function botaoStopEmergencia() { 
-            if (timerRearme) clearTimeout(timerRearme);
-            state = "PAUSED_ESTOP"; 
-            btnActuator.disabled = true;
-            btnRecover.disabled = false;
-            elevacaoAlvo = minElevacao;
-            atualizarEficienciaUI();
-            atualizarLedsPlataforma(false); // LED Vermelho ON, Azul OFF
-            receptorBobinaMat.emissive.setHex(0x000000);
-            bobinaMat.emissive.setHex(0x000000);
-            enviarComandoESP32("STOP", "E-STOP INTERLOCK", "REARME P/ CONTINUAR");
-        }
-
-        // PROTOCOLO NÍVEL 2: Queda de Energia / Pane na Rede AC (Fail-Safe + Preserva SoC)
-        function simularQuedaEnergia() {
-            if (timerRearme) clearTimeout(timerRearme);
-            state = "GRID_FAULT";
-            btnActuator.disabled = true;
-            btnRecover.disabled = false;
-            elevacaoAlvo = minElevacao; // Retorno seguro por gravidade/mola
-            atualizarEficienciaUI();
-            atualizarLedsPlataforma(false); // LED Vermelho ON, Azul OFF
-            receptorBobinaMat.emissive.setHex(0x000000);
-            bobinaMat.emissive.setHex(0x000000);
-            enviarComandoESP32("STOP", "QUEDA DE ENERGIA", "AGUARDANDO REDE");
-        }
-
-        // PROTOCOLO DE DESBLOQUEIO E RETOMADA DE CARGA
-        function rearmarSistema() {
-            if (state !== "PAUSED_ESTOP" && state !== "GRID_FAULT") return;
-            state = "RECOVERING";
-            btnRecover.disabled = true;
-            uiStat.innerText = "🔄 Protocolo de Rearme: Verificando Interlock e FOD...";
-            uiStat.style.color = "#00aaff";
-            atualizarDisplayTotem("AUTO-DIAGNOSTICO", "CHECANDO FOD...", "#00aaff");
-
-            timerRearme = setTimeout(() => {
-                simulacaoAtiva = true;
-                document.getElementById('start-btn').disabled = true;
-                ultimoEstadoEnviado = "";
-                if (distance <= 0.48) {
-                    state = "PARKED_WAITING";
-                    btnActuator.disabled = false;
-                    uiStat.innerText = "✅ Sistema Desbloqueado! Clique em Iniciar Indução (" + Math.floor(battery) + "%).";
-                    uiStat.style.color = "#00ff88";
-                    atualizarDisplayTotem("REARME CONCLUIDO", "BAT: " + Math.floor(battery) + "%", "#00ff88");
-                    enviarComandoESP32("PARKED", "SISTEMA REARMADO", "PRONTO P/ RETOMAR");
-                } else {
-                    state = "IDLE";
-                    btnActuator.disabled = true;
-                    uiStat.innerText = "✅ Sistema Desbloqueado! Aproxime o EV.";
-                    uiStat.style.color = "#00f2ff";
-                }
-            }, 1400);
-        }
-
-        function subirPlataforma() {
-            if (elevacaoAlvo < maxElevacao) {
-                elevacaoAlvo = Math.min(maxElevacao, elevacaoAlvo + 0.012);
-                atualizarEficienciaUI();
-            }
-        }
-
-        function descerPlataforma() {
-            if (elevacaoAlvo > minElevacao) {
-                elevacaoAlvo = Math.max(minElevacao, elevacaoAlvo - 0.012);
-                atualizarEficienciaUI();
-            }
-        }
-
-        function resetar() {
-            if (timerRearme) clearTimeout(timerRearme);
-            simulacaoAtiva = false;
-            ultimoEstadoEnviado = "";
-            cargaConcluidaEnviada = false;
-            vistaSubassoalhoAtiva = false;
-            document.getElementById('cam-btn').innerText = "Vista Acoplamento";
-            camera.position.set(11, 7, 13);
-            controls.target.set(0, 1.0, 2);
-
-            state = "IDLE"; 
-            battery = 15; 
-            distance = 5.0;
-            elevacaoAlvo = minElevacao;
-            atualizarEficienciaUI();
-            atualizarLedsPlataforma(false);
-            document.getElementById('sim-dist-slider').value = "5.00";
-            carGroup.position.set(0, 0, 7.0);
-            document.getElementById('start-btn').disabled = false; 
-            btnActuator.disabled = true;
-            btnRecover.disabled = true;
-            uiStat.innerText = "Aguardando Aproximação"; 
-            uiStat.style.color = "#ffaa00"; 
-            uiAct.innerText = "Nivelada (Chão)"; 
-            uiMag.innerText = "OFF"; 
-            uiMag.style.color = "";
-            ledVermelho.material.emissive.setHex(0xff0000); 
-            ledVerde.material.emissive.setHex(0x000000);
-            bobinaMat.emissive.setHex(0x000000);
-            receptorBobinaMat.emissive.setHex(0x000000);
-            ondasMagneticas.forEach(o => o.material.opacity = 0);
-            atualizarDisplayTotem("SISTEMA READY", "DIST: 5.00m");
-            
-            enviarComandoESP32("RESET", "SISTEMA READY", "PLATAFORMA LIVRE");
-        }
-
-        // --- ANIMATE INTEGRADO ---
-        let clockOnda = 0;
         function animate() {
-            requestAnimationFrame(animate); controls.update();
-            clockOnda += 0.05;
-
-            elevacaoPlataforma += (elevacaoAlvo - elevacaoPlataforma) * 0.1;
-            plataformaInducao.position.y = elevacaoPlataforma;
-            tesouraGroup.scale.y = Math.max(0.15, elevacaoPlataforma / 0.09);
-
-            uiDist.innerText = distance.toFixed(2) + " m";
-            uiBatTxt.innerText = Math.floor(battery) + "%"; uiBatBar.style.width = battery + "%";
-
-            switch (state) {
-                case "IDLE":
-                    ondasMagneticas.forEach(o => o.material.opacity = 0);
-                    atualizarDisplayTotem("APROXIME O EV", "DIST: " + distance.toFixed(2) + "m");
-                    break;
-
-                case "PARKED_WAITING":
-                    uiAct.innerText = "Receptor Alinhado";
-                    atualizarDisplayTotem("EV NA PLATAFORMA", "BAT: " + Math.floor(battery) + "%");
-                    break;
-
-                case "PLATFORM_RISING":
-                    uiStat.innerText = "Elevando base até o receptor do EV..."; 
-                    uiAct.innerText = "Elevando Base...";
-                    atualizarDisplayTotem("ALINHANDO BASE", "REDUZINDO GAP");
-                    if (Math.abs(elevacaoPlataforma - elevacaoAlvo) < 0.004) {
-                        state = "COUPLING";
-                    }
-                    break;
-
-                case "PAUSED_ESTOP":
-                    uiStat.innerText = "⛔ E-STOP ACIONADO — CARGA PAUSADA EM " + Math.floor(battery) + "% (CLIQUE EM REARMAR)";
-                    uiStat.style.color = "#ff3333";
-                    uiAct.innerText = "Recolhida (Interlock)";
-                    uiMag.innerText = "CORTADO (STANDBY)";
-                    uiMag.style.color = "#ff3333";
-                    atualizarDisplayTotem("E-STOP INTERLOCK", "PAUSADO: " + Math.floor(battery) + "%", "#ff3333");
-                    ledVermelho.material.emissive.setHex(0xff0000);
-                    ledVerde.material.emissive.setHex(0x000000);
-                    ondasMagneticas.forEach(o => o.material.opacity = 0);
-                    break;
-
-                case "GRID_FAULT":
-                    uiStat.innerText = "⚠️ QUEDA DE ENERGIA (PANE AC) — SO.C SALVO EM " + Math.floor(battery) + "%";
-                    uiStat.style.color = "#ffaa00";
-                    uiAct.innerText = "Retorno Fail-Safe";
-                    uiMag.innerText = "SEM REDE AC";
-                    uiMag.style.color = "#ffaa00";
-                    atualizarDisplayTotem("FALHA REDE AC", "SALVO: " + Math.floor(battery) + "%", "#ffaa00");
-                    ledVermelho.material.emissive.setHex(Math.sin(clockOnda * 3) > 0 ? 0xff0000 : 0x220000);
-                    ledVerde.material.emissive.setHex(0x000000);
-                    ondasMagneticas.forEach(o => o.material.opacity = 0);
-                    break;
-
-                case "RECOVERING":
-                    ondasMagneticas.forEach(o => o.material.opacity = 0);
-                    break;
-
-                case "COUPLING":
-                    uiMag.innerText = "ATIVO (INDUÇÃO WPT)"; uiMag.style.color = "#0099ff"; 
-                    uiAct.innerText = "Acoplada ao EV";
-                    ledVermelho.material.emissive.setHex(0x000000); ledVerde.material.emissive.setHex(0x00ff00);
-                    atualizarLedsPlataforma(true); // LED Azul ON, Vermelho OFF
-                    bobinaMat.emissive.setHex(0x552200);
-                    receptorBobinaMat.emissive.setHex(0x442200);
-                    enviarComandoESP32("START", "CARREGANDO EV", "INDUCAO ATIVA");
-                    state = "CHARGING";
-                    break;
-
-                case "CHARGING":
-                    uiStat.innerText = "Carregamento Ativo (LED Azul) — Transferindo Energia"; uiStat.style.color = "#00ff88";
-                    
-                    ondasMagneticas.forEach((onda, idx) => {
-                        const ciclo = (clockOnda + idx * 0.35) % 1.0;
-                        onda.position.y = 0.036 + ciclo * 0.022;
-                        const escala = 0.95 + ciclo * 0.3;
-                        onda.scale.set(escala, escala, 1);
-                        onda.material.opacity = Math.max(0, 0.9 - ciclo);
-                    });
-
-                    if (battery < 100) {
-                        const faixa = Math.max(0.01, maxElevacao - minElevacao);
-                        const prog = Math.min(1, Math.max(0, (elevacaoPlataforma - minElevacao) / faixa));
-                        battery += 0.05 + prog * 0.03;
-                        atualizarDisplayTotem("CARREGANDO EV", "BAT: " + Math.floor(battery) + "%", "#0099ff");
-                    } else {
-                        battery = 100;
-                        ondasMagneticas.forEach(o => o.material.opacity = 0);
-                        receptorBobinaMat.emissive.setHex(0x000000);
-                        bobinaMat.emissive.setHex(0x000000);
-                        atualizarLedsPlataforma(false); // Volta ao LED Vermelho ao finalizar carga
-                        uiMag.innerText = "CONCLUÍDO (STANDBY)";
-                        uiStat.innerText = "✅ Carga Completa (100%) — Indução Desligada.";
-                        atualizarDisplayTotem("CARGA COMPLETA", "BAT: 100%", "#00ff88");
-                        if (!cargaConcluidaEnviada) {
-                            cargaConcluidaEnviada = true;
-                            enviarComandoESP32("STOP", "CARGA COMPLETA", "BAT: 100%");
-                        }
-                    }
-                    break;
-            }
+            requestAnimationFrame(animate);
+            controls.update();
             renderer.render(scene, camera);
         }
+        animate();
 
-        window.addEventListener('resize', () => {
-            camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
+        window.addEventListener("resize", () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
         });
-        animate();
     </script>
 </body>
 </html>
