@@ -1,0 +1,2797 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simulação Automática Completa WPT Brasil - HC-SR04 & ESP32-S3</title>
+    <style>
+        :root {
+            --primary: #00f2ff;
+            --panel: rgba(12, 19, 34, 0.92);
+            --border: rgba(0, 242, 255, 0.28);
+            --success: #00e676;
+            --warning: #ffbb00;
+            --danger: #ff4d4d;
+            --text-muted: #94a3b8;
+        }
+
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #09111e;
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            color: #f8fafc;
+            user-select: none;
+        }
+
+        /* ============================================================
+           TELA DE CARREGAMENTO / MODO ESPERA COM CARRINHO CORRENDO
+           ============================================================ */
+        #loading-splash {
+            position: fixed;
+            inset: 0;
+            background: radial-gradient(circle at 50% 42%, #13233f 0%, #070d19 100%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 2500;
+            transition: opacity 0.65s ease, visibility 0.65s ease;
+        }
+
+        #loading-splash.hidden {
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+        }
+
+        .splash-track-box {
+            position: relative;
+            width: 340px;
+            height: 120px;
+            overflow: hidden;
+            margin-bottom: 14px;
+        }
+
+        .speed-line {
+            position: absolute;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, var(--primary));
+            border-radius: 2px;
+            opacity: 0.7;
+            animation: windMove 0.75s linear infinite;
+        }
+        .speed-line:nth-child(1) { top: 26px; width: 65px; animation-delay: 0s; }
+        .speed-line:nth-child(2) { top: 44px; width: 90px; animation-delay: 0.25s; }
+        .speed-line:nth-child(3) { top: 62px; width: 50px; animation-delay: 0.45s; }
+
+        .running-car-wrap {
+            position: absolute;
+            bottom: 22px;
+            left: 50%;
+            transform: translateX(-50%);
+            animation: carBounce 0.42s ease-in-out infinite alternate;
+        }
+
+        .car-wheel {
+            transform-box: fill-box;
+            transform-origin: center;
+            animation: wheelSpin 0.45s linear infinite;
+        }
+
+        .splash-road {
+            position: absolute;
+            bottom: 14px;
+            left: 0;
+            width: 200%;
+            height: 4px;
+            background: repeating-linear-gradient(
+                90deg,
+                var(--primary) 0px,
+                var(--primary) 26px,
+                transparent 26px,
+                transparent 52px
+            );
+            opacity: 0.85;
+            animation: roadScroll 0.55s linear infinite;
+        }
+
+        .splash-title {
+            font-size: 14px;
+            font-weight: 800;
+            letter-spacing: 2px;
+            color: var(--primary);
+            text-transform: uppercase;
+            margin-bottom: 6px;
+        }
+
+        .splash-sub {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-bottom: 16px;
+            font-family: 'Consolas', monospace;
+        }
+
+        .splash-bar-bg {
+            width: 280px;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 999px;
+            overflow: hidden;
+            border: 1px solid rgba(0, 242, 255, 0.25);
+        }
+
+        #splash-bar-fill {
+            width: 15%;
+            height: 100%;
+            background: linear-gradient(90deg, #0284c7, var(--primary), var(--success));
+            border-radius: 999px;
+            transition: width 0.35s ease;
+        }
+
+        @keyframes roadScroll { from { transform: translateX(0); } to { transform: translateX(-52px); } }
+        @keyframes windMove {
+            from { transform: translateX(350px); opacity: 0; }
+            30% { opacity: 0.8; }
+            to { transform: translateX(-110px); opacity: 0; }
+        }
+        @keyframes carBounce {
+            from { transform: translateX(-50%) translateY(0px); }
+            to { transform: translateX(-50%) translateY(-2.5px); }
+        }
+        @keyframes wheelSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+        /* ============================================================
+           PAINEL DE MONITORAMENTO RETRÁTIL (HUD ESQUERDO)
+           ============================================================ */
+        #ui-panel {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 386px;
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 18px;
+            box-shadow: 0 14px 36px rgba(0, 0, 0, 0.42);
+            z-index: 100;
+            backdrop-filter: blur(10px);
+            transition: transform 0.32s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.25s ease;
+        }
+
+        #ui-panel.collapsed {
+            opacity: 0;
+            transform: translateX(-115%);
+            pointer-events: none;
+        }
+
+        #hud-restore-pill {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(12, 19, 34, 0.94);
+            border: 1px solid var(--primary);
+            border-radius: 999px;
+            padding: 9px 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            box-shadow: 0 10px 26px rgba(0, 0, 0, 0.45), 0 0 16px rgba(0, 242, 255, 0.25);
+            backdrop-filter: blur(10px);
+            cursor: pointer;
+            z-index: 105;
+            opacity: 0;
+            transform: translateY(-14px);
+            pointer-events: none;
+            transition: all 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        #hud-restore-pill.visible {
+            opacity: 1;
+            transform: translateY(0);
+            pointer-events: auto;
+        }
+
+        #hud-restore-pill:hover {
+            background: rgba(18, 30, 52, 0.98);
+            box-shadow: 0 12px 30px rgba(0, 0, 0, 0.55), 0 0 22px rgba(0, 242, 255, 0.45);
+        }
+
+        .pill-dot {
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            background: var(--danger);
+            box-shadow: 0 0 8px var(--danger);
+        }
+
+        .pill-title {
+            font-size: 11.5px;
+            font-weight: 800;
+            color: var(--primary);
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+        }
+
+        .pill-dist {
+            font-family: 'Consolas', monospace;
+            font-size: 12px;
+            font-weight: 700;
+            color: #ffffff;
+            background: rgba(255, 255, 255, 0.08);
+            padding: 2px 8px;
+            border-radius: 999px;
+        }
+
+        .pill-action {
+            font-size: 11px;
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+
+        .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 14px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+            padding-bottom: 10px;
+        }
+
+        h1 {
+            font-size: 12px;
+            color: var(--primary);
+            text-transform: uppercase;
+            margin: 0;
+            letter-spacing: 1.1px;
+        }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .badge-version {
+            font-size: 9.5px;
+            background: rgba(0, 230, 118, 0.16);
+            color: var(--success);
+            border: 1px solid rgba(0, 230, 118, 0.4);
+            padding: 3px 8px;
+            border-radius: 999px;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+
+        .btn-hide-panel {
+            background: rgba(255, 255, 255, 0.07);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            color: #cbd5e1;
+            font-size: 11px;
+            font-weight: 700;
+            padding: 3px 9px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.18s ease;
+        }
+
+        .btn-hide-panel:hover {
+            background: rgba(0, 242, 255, 0.18);
+            border-color: var(--primary);
+            color: #ffffff;
+        }
+
+        .metric {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+            font-size: 13px;
+        }
+
+        .label { color: var(--text-muted); }
+
+        .value {
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-weight: bold;
+            color: #ffffff;
+        }
+
+        .status-pill {
+            padding: 2px 9px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+
+        .pill-ok { background: rgba(0, 230, 118, 0.16); color: var(--success); border: 1px solid rgba(0, 230, 118, 0.4); }
+        .pill-warn { background: rgba(255, 187, 0, 0.16); color: var(--warning); border: 1px solid rgba(255, 187, 0, 0.4); }
+        .pill-off { background: rgba(255, 77, 77, 0.16); color: var(--danger); border: 1px solid rgba(255, 77, 77, 0.4); }
+        .pill-blue { background: rgba(0, 168, 255, 0.18); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.45); }
+
+        #state-box {
+            margin-top: 10px;
+            padding: 11px;
+            border-radius: 10px;
+            background: rgba(0, 0, 0, 0.42);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            transition: all 0.25s ease;
+        }
+
+        #state-title {
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+            margin-bottom: 4px;
+            color: var(--danger);
+        }
+
+        #state-message {
+            font-size: 12.5px;
+            color: #e2e8f0;
+            line-height: 1.35;
+        }
+
+        #alignment-alert {
+            margin-top: 9px;
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 700;
+            text-align: center;
+            background: rgba(255, 77, 77, 0.18);
+            border: 1px solid rgba(255, 77, 77, 0.5);
+            color: #ff8080;
+            transition: all 0.25s ease;
+        }
+
+        /* ============================================================
+           BARRA INFERIOR DO DIRETOR DE SIMULAÇÃO AUTOMÁTICA
+           ============================================================ */
+        #auto-director-bar {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: min(740px, calc(100vw - 210px));
+            background: rgba(12, 19, 34, 0.94);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 12px 16px;
+            box-shadow: 0 14px 36px rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(12px);
+            z-index: 200;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .director-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .director-step-badge {
+            font-size: 10.5px;
+            font-weight: 800;
+            color: var(--primary);
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            margin-bottom: 2px;
+        }
+
+        .director-desc {
+            font-size: 12px;
+            color: #f1f5f9;
+            font-weight: 600;
+        }
+
+        .director-controls {
+            display: flex;
+            gap: 6px;
+            flex-shrink: 0;
+        }
+
+        .dir-btn {
+            background: rgba(0, 242, 255, 0.12);
+            border: 1px solid var(--primary);
+            color: var(--primary);
+            padding: 6px 11px;
+            border-radius: 7px;
+            font-size: 10.5px;
+            font-weight: 700;
+            cursor: pointer;
+            text-transform: uppercase;
+            transition: all 0.18s ease;
+        }
+
+        .dir-btn:hover {
+            background: var(--primary);
+            color: #0b1324;
+        }
+
+        .dir-btn.esp-sync-active {
+            background: rgba(0, 230, 118, 0.22);
+            border-color: var(--success);
+            color: var(--success);
+        }
+
+        .director-progress-track {
+            width: 100%;
+            height: 5px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 999px;
+            overflow: hidden;
+        }
+
+        #director-progress-fill {
+            width: 0%;
+            height: 100%;
+            background: linear-gradient(90deg, var(--primary), var(--success));
+            transition: width 0.12s linear;
+        }
+
+        /* ============================================================
+           ABA FLUTUANTE ARRASTÁVEL COM ÍCONE DE CARRO (CONTROLES)
+           ============================================================ */
+        #floating-car-widget {
+            position: fixed;
+            bottom: 26px;
+            right: 26px;
+            z-index: 900;
+            touch-action: none;
+        }
+
+        #floating-car-btn {
+            width: 62px;
+            height: 62px;
+            border-radius: 50%;
+            background: linear-gradient(145deg, #0f172a, #1e293b);
+            border: 2px solid var(--primary);
+            color: var(--primary);
+            box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5), 0 0 18px rgba(0, 242, 255, 0.35);
+            cursor: grab;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+            position: relative;
+        }
+
+        #floating-car-btn:hover {
+            transform: scale(1.06);
+            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6), 0 0 24px rgba(0, 242, 255, 0.6);
+        }
+
+        #floating-car-btn:active { cursor: grabbing; transform: scale(0.97); }
+        #floating-car-btn.menu-open { background: var(--primary); color: #0b1324; }
+
+        .car-fab-tag {
+            font-size: 8.5px;
+            font-weight: 800;
+            letter-spacing: 0.6px;
+            text-transform: uppercase;
+            margin-top: 2px;
+        }
+
+        #floating-cam-menu {
+            position: absolute;
+            bottom: 74px;
+            right: 0;
+            width: 288px;
+            background: rgba(12, 19, 34, 0.96);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 12px;
+            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+            backdrop-filter: blur(12px);
+            display: none;
+            flex-direction: column;
+            gap: 7px;
+            animation: menuPop 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        #floating-cam-menu.open { display: flex; }
+
+        .cam-menu-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 6px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            font-size: 10.5px;
+            font-weight: 800;
+            color: var(--primary);
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+        }
+
+        .cam-menu-hint {
+            font-size: 9.5px;
+            color: var(--text-muted);
+            font-weight: 500;
+            text-transform: none;
+            letter-spacing: 0;
+        }
+
+        .cam-option-btn {
+            width: 100%;
+            text-align: left;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(0, 242, 255, 0.25);
+            color: #e2e8f0;
+            padding: 8px 11px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 700;
+            font-size: 11.5px;
+            transition: all 0.18s ease;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            text-decoration: none;
+        }
+
+        .cam-option-btn:hover {
+            background: rgba(0, 242, 255, 0.16);
+            border-color: var(--primary);
+            color: #ffffff;
+        }
+
+        .cam-option-btn.active-cam {
+            background: var(--primary);
+            border-color: var(--primary);
+            color: #0b1324;
+        }
+
+        @keyframes menuPop {
+            from { opacity: 0; transform: translateY(8px) scale(0.96); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+
+        /* ============================================================
+           CENTRAL DE NOTIFICAÇÕES EMPILHÁVEIS (CANTO SUPERIOR DIREITO)
+           ============================================================ */
+        #toast-container {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            width: 356px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            z-index: 980;
+            pointer-events: none;
+        }
+
+        .toast-card {
+            position: relative;
+            width: 100%;
+            background: rgba(12, 19, 34, 0.96);
+            border: 1px solid rgba(0, 230, 118, 0.45);
+            border-left: 5px solid var(--success);
+            border-radius: 12px;
+            padding: 13px 15px 15px 15px;
+            box-shadow: 0 14px 34px rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(10px);
+            overflow: hidden;
+            pointer-events: auto;
+            opacity: 0;
+            transform: translateX(115%);
+            transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.25s ease;
+        }
+
+        .toast-card.show {
+            opacity: 1;
+            transform: translateX(0);
+        }
+
+        .toast-card.toast-info {
+            border-color: rgba(0, 242, 255, 0.45);
+            border-left-color: var(--primary);
+        }
+        .toast-card.toast-info .toast-badge-icon {
+            background: rgba(0, 242, 255, 0.16);
+            border-color: var(--primary);
+            color: var(--primary);
+        }
+        .toast-card.toast-info .toast-title { color: var(--primary); }
+        .toast-card.toast-info .toast-progress { background: var(--primary); }
+
+        .toast-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 5px;
+        }
+
+        .toast-title-wrap {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .toast-badge-icon {
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            background: rgba(0, 230, 118, 0.18);
+            border: 1px solid var(--success);
+            color: var(--success);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 800;
+            flex-shrink: 0;
+        }
+
+        .toast-title {
+            font-size: 12px;
+            font-weight: 800;
+            color: var(--success);
+            letter-spacing: 0.4px;
+            text-transform: uppercase;
+        }
+
+        .toast-close {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            font-size: 16px;
+            line-height: 1;
+            padding: 2px 6px;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+
+        .toast-close:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: #ffffff;
+        }
+
+        .toast-body {
+            font-size: 12px;
+            color: #e2e8f0;
+            line-height: 1.38;
+            padding-left: 30px;
+        }
+
+        .toast-body strong {
+            color: #ffffff;
+            display: block;
+            margin-bottom: 2px;
+        }
+
+        .toast-progress {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            height: 3px;
+            width: 100%;
+            background: var(--success);
+            transform-origin: left;
+            transform: scaleX(1);
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Tela de Carregamento / Modo Espera com Carrinho Animado -->
+    <div id="loading-splash">
+        <div class="splash-track-box">
+            <div class="speed-line"></div>
+            <div class="speed-line"></div>
+            <div class="speed-line"></div>
+
+            <div class="running-car-wrap">
+                <svg width="160" height="72" viewBox="0 0 160 72" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <ellipse cx="80" cy="64" rx="52" ry="4" fill="#00f2ff" fill-opacity="0.35"/>
+                    <path d="M22 46 L28 31 C33 21 46 15 64 15 H102 C117 15 129 22 136 33 L144 42 C146 45 145 50 140 51 H24 C19 51 19 48 22 46 Z" fill="#0284c7" stroke="#38bdf8" stroke-width="2"/>
+                    <path d="M40 31 L47 20 H76 V31 H40 Z" fill="#0f172a"/>
+                    <path d="M82 20 H102 C111 20 119 24 124 31 H82 V20 Z" fill="#0f172a"/>
+                    <path d="M137 36 L144 39 L139 43 Z" fill="#00f2ff"/>
+                    <polygon points="144,37 160,33 160,46 144,42" fill="url(#headlightGrad)"/>
+                    <rect x="21" y="36" width="5" height="6" rx="2" fill="#ff4d4d"/>
+                    <g class="car-wheel">
+                        <circle cx="44" cy="51" r="11" fill="#0f172a" stroke="#94a3b8" stroke-width="2.5"/>
+                        <circle cx="44" cy="51" r="4" fill="#00f2ff"/>
+                        <line x1="44" y1="41" x2="44" y2="61" stroke="#cbd5e1" stroke-width="1.5"/>
+                        <line x1="34" y1="51" x2="54" y2="51" stroke="#cbd5e1" stroke-width="1.5"/>
+                    </g>
+                    <g class="car-wheel">
+                        <circle cx="118" cy="51" r="11" fill="#0f172a" stroke="#94a3b8" stroke-width="2.5"/>
+                        <circle cx="118" cy="51" r="4" fill="#00f2ff"/>
+                        <line x1="118" y1="41" x2="118" y2="61" stroke="#cbd5e1" stroke-width="1.5"/>
+                        <line x1="108" y1="51" x2="128" y2="51" stroke="#cbd5e1" stroke-width="1.5"/>
+                    </g>
+                    <defs>
+                        <linearGradient id="headlightGrad" x1="144" y1="39" x2="160" y2="39" gradientUnits="userSpaceOnUse">
+                            <stop stop-color="#00f2ff" stop-opacity="0.75"/>
+                            <stop offset="1" stop-color="#00f2ff" stop-opacity="0"/>
+                        </linearGradient>
+                    </defs>
+                </svg>
+            </div>
+            <div class="splash-road"></div>
+        </div>
+        <div class="splash-title">Carregando Simulação Automática WPT Brasil</div>
+        <div id="splash-status-text" class="splash-sub">Renderizando cenário urbano PBR, ESP32-S3 e módulo receptor...</div>
+        <div class="splash-bar-bg">
+            <div id="splash-bar-fill"></div>
+        </div>
+    </div>
+
+    <!-- Pílula Compacta para Restaurar o Card quando Oculto -->
+    <div id="hud-restore-pill" onclick="alternarVisibilidadePainel(true)" title="Clique para expandir o painel de monitoramento">
+        <span id="pill-status-dot" class="pill-dot"></span>
+        <span class="pill-title">SIMULAÇÃO AUTO • HC-SR04</span>
+        <span id="pill-dist-badge" class="pill-dist">3.50 m</span>
+        <span class="pill-action">Mostrar ▾</span>
+    </div>
+
+    <!-- Painel de Monitoramento (Retrátil) -->
+    <div id="ui-panel">
+        <div class="panel-header">
+            <h1>Simulação WPT • HC-SR04</h1>
+            <div class="header-actions">
+                <span id="badge-modo-painel" class="badge-version">AUTO COMPLETA</span>
+                <button class="btn-hide-panel" onclick="alternarVisibilidadePainel(false)" title="Ocultar painel de monitoramento">Ocultar</button>
+            </div>
+        </div>
+
+        <div class="metric">
+            <span class="label">MQTT Conectado:</span>
+            <span id="mqtt-status" class="status-pill pill-warn">Conectando...</span>
+        </div>
+        <div class="metric">
+            <span class="label">ESP32-S3:</span>
+            <span id="esp-status" class="status-pill pill-off">Aguardando Sinal</span>
+        </div>
+        <div class="metric">
+            <span class="label">Distância HC-SR04:</span>
+            <span id="dist-val" class="value" style="color: var(--primary);">3.50 m</span>
+        </div>
+        <div class="metric">
+            <span class="label">LEDs Módulo Indutor:</span>
+            <span id="led-module-status" class="status-pill pill-off">LED Vermelho (Desconectado)</span>
+        </div>
+        <div class="metric">
+            <span class="label">Veículo Detectado:</span>
+            <span id="det-val" class="status-pill pill-off">NÃO</span>
+        </div>
+        <div class="metric">
+            <span class="label">Veículo Posicionado:</span>
+            <span id="pos-val" class="status-pill pill-off">NÃO</span>
+        </div>
+        <div class="metric">
+            <span class="label">Posição Validada:</span>
+            <span id="val-status" class="status-pill pill-off">PENDENTE</span>
+        </div>
+        <div class="metric">
+            <span class="label">Acoplamento Indutivo (WPT):</span>
+            <span id="wpt-transfer-status" class="value" style="color: #38bdf8;">0.0 kW (Standby)</span>
+        </div>
+
+        <div id="state-box">
+            <div id="state-title">AGUARDANDO POSICIONAMENTO</div>
+            <div id="state-message">Aproxime o veículo da área de carregamento.</div>
+        </div>
+
+        <div id="alignment-alert">⚠ Ajuste o posicionamento do veículo.</div>
+    </div>
+
+    <!-- Barra Narrativa de Controle da Simulação Automática Completa -->
+    <div id="auto-director-bar">
+        <div class="director-top">
+            <div>
+                <div id="dir-step-label" class="director-step-badge">ETAPA 1 DE 5 • INICIALIZAÇÃO & TELEMETRIA</div>
+                <div id="dir-step-desc" class="director-desc">Conectando broker MQTT e estabelecendo comunicação com ESP32-S3...</div>
+            </div>
+            <div class="director-controls">
+                <button id="btn-pause-demo" class="dir-btn" onclick="alternarPausaDemo()">Pausar</button>
+                <button class="dir-btn" onclick="reiniciarCicloDemo()">Reiniciar</button>
+                <button id="btn-fonte-dados" class="dir-btn" onclick="alternarFonteDados()" title="Alternar entre demonstração automática e placa ESP32-S3 física">Fonte: Auto</button>
+            </div>
+        </div>
+        <div class="director-progress-track">
+            <div id="director-progress-fill"></div>
+        </div>
+    </div>
+
+    <!-- Aba Flutuante Arrastável com Ícone de Carro -->
+    <div id="floating-car-widget">
+        <div id="floating-cam-menu">
+            <div class="cam-menu-header">
+                <span>Câmeras & Inspeção</span>
+                <span class="cam-menu-hint">Arraste o carro</span>
+            </div>
+            <button id="btn-cam-tour" class="cam-option-btn active-cam" onclick="definirCamera('tour')">
+                <span>🎬</span> Câmera Automática (Tour Completo)
+            </button>
+            <button id="btn-cam-geral" class="cam-option-btn" onclick="definirCamera('geral')">
+                <span>🏙️</span> Vista Geral do Eletroposto (BR)
+            </button>
+            <button id="btn-cam-acoplamento" class="cam-option-btn" onclick="definirCamera('acoplamento')">
+                <span>⚡</span> Módulo Receptor (Sob o Carro)
+            </button>
+            <button id="btn-cam-sensor" class="cam-option-btn" onclick="definirCamera('sensor')">
+                <span>📡</span> Foco Sensor HC-SR04
+            </button>
+            <button id="btn-cam-esp32" class="cam-option-btn" onclick="definirCamera('esp32')">
+                <span>🔌</span> Placa ESP32-S3 Física (Totem)
+            </button>
+            <button id="btn-cam-poste" class="cam-option-btn" onclick="definirCamera('poste')">
+                <span>🏗️</span> Rede Elétrica & Transformador (BR)
+            </button>
+            <button class="cam-option-btn" onclick="alternarVisibilidadePainel()">
+                <span>📊</span> Mostrar / Ocultar Painel HUD
+            </button>
+        </div>
+
+        <button id="floating-car-btn" title="Clique para escolher ângulo de inspeção ou arraste para mover">
+            <svg width="28" height="20" viewBox="0 0 64 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M6 23 L10 13 C13 7 20 4 29 4 H43 C50 4 55 8 59 14 L62 20 C63 22 62 25 59 25 H8 C5 25 5 24 6 23 Z" stroke="currentColor" stroke-width="3.2" fill="none"/>
+                <path d="M18 14 L22 8 H34 V14 H18 Z" fill="currentColor" fill-opacity="0.35"/>
+                <path d="M37 8 H44 C48 8 51 10 54 14 H37 V8 Z" fill="currentColor" fill-opacity="0.35"/>
+                <circle cx="17" cy="26" r="5" fill="#0b1324" stroke="currentColor" stroke-width="3"/>
+                <circle cx="49" cy="26" r="5" fill="#0b1324" stroke="currentColor" stroke-width="3"/>
+            </svg>
+            <span class="car-fab-tag">Câmeras</span>
+        </button>
+    </div>
+
+    <!-- Central de Notificações Empilháveis -->
+    <div id="toast-container" aria-live="polite"></div>
+
+    <canvas id="totem-screen-canvas" width="512" height="256" style="display: none;"></canvas>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://unpkg.com/mqtt@4.3.7/dist/mqtt.min.js"></script>
+
+    <script>
+        // ============================================================
+        // 1. CONTROLE DA TELA DE CARREGAMENTO (MODO ESPERA)
+        // ============================================================
+        const splashInicio = performance.now();
+        let cenaPronta = false;
+
+        function atualizarProgressoSplash(pct, texto) {
+            const bar = document.getElementById("splash-bar-fill");
+            const txt = document.getElementById("splash-status-text");
+            if (bar) bar.style.width = pct + "%";
+            if (txt && texto) txt.innerText = texto;
+        }
+
+        function finalizarSplash() {
+            if (cenaPronta) return;
+            cenaPronta = true;
+            atualizarProgressoSplash(100, "Ambiente completo carregado! Iniciando simulação...");
+            const decorrido = performance.now() - splashInicio;
+            const esperaMinima = Math.max(0, 1400 - decorrido);
+            setTimeout(() => {
+                document.getElementById("loading-splash").classList.add("hidden");
+            }, esperaMinima);
+        }
+
+        atualizarProgressoSplash(28, "Gerando infraestrutura urbana PBR e rede elétrica Brasil...");
+
+        // ============================================================
+        // 2. CONTROLE DE OCULTAR / RESTAURAR CARD DE MONITORAMENTO
+        // ============================================================
+        let painelOculto = false;
+
+        function alternarVisibilidadePainel(forcarVisivel = null) {
+            const panel = document.getElementById("ui-panel");
+            const pill = document.getElementById("hud-restore-pill");
+
+            if (forcarVisivel === true) {
+                painelOculto = false;
+            } else if (forcarVisivel === false) {
+                painelOculto = true;
+            } else {
+                painelOculto = !painelOculto;
+            }
+
+            panel.classList.toggle("collapsed", painelOculto);
+            pill.classList.toggle("visible", painelOculto);
+        }
+
+        // ============================================================
+        // 3. CENTRAL DE NOTIFICAÇÕES (PLACA ESP32-S3, MQTT & POSIÇÃO)
+        // ============================================================
+        function tocarSomNotificacao(tipo = "success") {
+            try {
+                const AudioCtx = window.AudioContext || window.webkitAudioContext;
+                if (!AudioCtx) return;
+                const ctx = new AudioCtx();
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = "sine";
+
+                if (tipo === "info") {
+                    osc.frequency.setValueAtTime(523.25, ctx.currentTime);
+                    osc.frequency.setValueAtTime(659.25, ctx.currentTime + 0.11);
+                } else {
+                    osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+                    osc.frequency.setValueAtTime(880.00, ctx.currentTime + 0.12);
+                }
+
+                gain.gain.setValueAtTime(0.055, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.42);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start();
+                osc.stop(ctx.currentTime + 0.42);
+            } catch (e) {}
+        }
+
+        function exibirNotificacao({ titulo, subtitulo, descricao, tipo = "success", icone = "✓", duracao = 4600 }) {
+            const container = document.getElementById("toast-container");
+            while (container.children.length >= 3) {
+                container.removeChild(container.firstElementChild);
+            }
+
+            const card = document.createElement("div");
+            card.className = `toast-card ${tipo === "info" ? "toast-info" : ""}`;
+            card.innerHTML = `
+                <div class="toast-header">
+                    <div class="toast-title-wrap">
+                        <span class="toast-badge-icon">${icone}</span>
+                        <span class="toast-title">${titulo}</span>
+                    </div>
+                    <button class="toast-close" title="Fechar aviso">×</button>
+                </div>
+                <div class="toast-body">
+                    <strong>${subtitulo}</strong>
+                    ${descricao}
+                </div>
+                <div class="toast-progress"></div>
+            `;
+
+            const fecharCard = () => {
+                card.classList.remove("show");
+                setTimeout(() => {
+                    if (card.parentNode) card.parentNode.removeChild(card);
+                }, 280);
+            };
+
+            card.querySelector(".toast-close").addEventListener("click", fecharCard);
+            container.appendChild(card);
+
+            const bar = card.querySelector(".toast-progress");
+            void card.offsetWidth;
+            card.classList.add("show");
+            bar.style.transition = `transform ${duracao}ms linear`;
+            bar.style.transform = "scaleX(0)";
+
+            tocarSomNotificacao(tipo);
+            setTimeout(fecharCard, duracao);
+        }
+
+        // ============================================================
+        // 4. ABA FLUTUANTE ARRASTÁVEL COM ÍCONE DE CARRO
+        // ============================================================
+        (function configurarWidgetFlutuante() {
+            const widget = document.getElementById("floating-car-widget");
+            const btn = document.getElementById("floating-car-btn");
+            const menu = document.getElementById("floating-cam-menu");
+
+            let arrastando = false;
+            let moveu = false;
+            let startX = 0, startY = 0;
+            let origLeft = 0, origTop = 0;
+
+            function ajustarDirecaoMenu() {
+                const rect = widget.getBoundingClientRect();
+                if (rect.top < 340) {
+                    menu.style.bottom = "auto";
+                    menu.style.top = "74px";
+                } else {
+                    menu.style.top = "auto";
+                    menu.style.bottom = "74px";
+                }
+                if (rect.left < 240) {
+                    menu.style.right = "auto";
+                    menu.style.left = "0";
+                } else {
+                    menu.style.left = "auto";
+                    menu.style.right = "0";
+                }
+            }
+
+            btn.addEventListener("pointerdown", (e) => {
+                arrastando = true;
+                moveu = false;
+                startX = e.clientX;
+                startY = e.clientY;
+                const rect = widget.getBoundingClientRect();
+                origLeft = rect.left;
+                origTop = rect.top;
+                btn.setPointerCapture(e.pointerId);
+            });
+
+            btn.addEventListener("pointermove", (e) => {
+                if (!arrastando) return;
+                const dx = e.clientX - startX;
+                const dy = e.clientY - startY;
+                if (Math.hypot(dx, dy) > 6) moveu = true;
+                if (moveu) {
+                    const maxLeft = window.innerWidth - widget.offsetWidth - 10;
+                    const maxTop = window.innerHeight - widget.offsetHeight - 10;
+                    const novoLeft = Math.min(Math.max(10, origLeft + dx), maxLeft);
+                    const novoTop = Math.min(Math.max(10, origTop + dy), maxTop);
+
+                    widget.style.right = "auto";
+                    widget.style.bottom = "auto";
+                    widget.style.left = novoLeft + "px";
+                    widget.style.top = novoTop + "px";
+                    ajustarDirecaoMenu();
+                }
+            });
+
+            btn.addEventListener("pointerup", (e) => {
+                if (!arrastando) return;
+                arrastando = false;
+                btn.releasePointerCapture(e.pointerId);
+
+                if (!moveu) {
+                    ajustarDirecaoMenu();
+                    const aberto = menu.classList.toggle("open");
+                    btn.classList.toggle("menu-open", aberto);
+                }
+            });
+        })();
+
+        // ============================================================
+        // 5. PARÂMETROS DO PROTÓTIPO, MQTT E CONTROLE DE MODO
+        // ============================================================
+        const MQTT_BROKER_WSS  = "wss://broker.hivemq.com:8884/mqtt";
+        const TOPIC_DIST       = "lzinnbarbosa/plugcharge/dist";
+        const TOPIC_STATUS     = "lzinnbarbosa/plugcharge/status";
+
+        const DIST_DETECCAO    = 2.50;
+        const DIST_ALINHADO    = 0.48;
+        const DIST_SAIDA_ZONA  = 0.60;
+
+        let distance = 3.50;
+        let potenciaWPT = 0.0;
+        let notificacaoPosicaoEnviada = false;
+        let modoCameraAtual = "tour";
+        let usarPlacaFisica = false;
+        let espFisicoOnline = false;
+        let ultimoPacoteEspMs = 0;
+
+        // ============================================================
+        // 6. CENA 3D PBR DE ALTA NITIDEZ (IDÊNTICA AO PROJETO PRINCIPAL)
+        // ============================================================
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x93c9ea);
+        scene.fog = new THREE.FogExp2(0x93c9ea, 0.010);
+
+        const camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.01, 250);
+        camera.position.set(10.2, 5.8, 12.2);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        renderer.outputEncoding = THREE.sRGBEncoding;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.08;
+        document.body.appendChild(renderer.domElement);
+
+        const maxAnisotropy = renderer.capabilities.getMaxAnisotropy();
+
+        (function gerarMapaAmbientePBR() {
+            const pmrem = new THREE.PMREMGenerator(renderer);
+            pmrem.compileEquirectangularShader();
+            const envScene = new THREE.Scene();
+            const skyDome = new THREE.Mesh(
+                new THREE.SphereGeometry(40, 24, 16),
+                new THREE.MeshBasicMaterial({ color: 0xdbeafe, side: THREE.BackSide })
+            );
+            const groundBounce = new THREE.Mesh(
+                new THREE.CircleGeometry(40, 24),
+                new THREE.MeshBasicMaterial({ color: 0x334155 })
+            );
+            groundBounce.rotation.x = -Math.PI / 2;
+            groundBounce.position.y = -4;
+            const sunPanel = new THREE.Mesh(
+                new THREE.PlaneGeometry(25, 25),
+                new THREE.MeshBasicMaterial({ color: 0xffffff })
+            );
+            sunPanel.position.set(15, 25, 12);
+            sunPanel.lookAt(0, 0, 0);
+            envScene.add(skyDome, groundBounce, sunPanel);
+
+            const envRT = pmrem.fromScene(envScene, 0.04);
+            scene.environment = envRT.texture;
+            pmrem.dispose();
+        })();
+
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.07;
+        controls.target.set(0, 1.1, 1.8);
+
+        controls.addEventListener("start", () => {
+            if (modoCameraAtual === "tour") {
+                modoCameraAtual = "manual";
+                document.querySelectorAll(".cam-option-btn").forEach((b) => b.classList.remove("active-cam"));
+            }
+        });
+
+        const hemiLight = new THREE.HemisphereLight(0xe0f2fe, 0x3f4e3c, 0.72);
+        hemiLight.position.set(0, 30, 0);
+        scene.add(hemiLight);
+
+        const sunLight = new THREE.DirectionalLight(0xfffbeb, 1.45);
+        sunLight.position.set(16, 28, 14);
+        sunLight.castShadow = true;
+        sunLight.shadow.mapSize.width = 2048;
+        sunLight.shadow.mapSize.height = 2048;
+        sunLight.shadow.camera.near = 2;
+        sunLight.shadow.camera.far = 75;
+        const dShadow = 18;
+        sunLight.shadow.camera.left = -dShadow;
+        sunLight.shadow.camera.right = dShadow;
+        sunLight.shadow.camera.top = dShadow;
+        sunLight.shadow.camera.bottom = -dShadow;
+        sunLight.shadow.bias = -0.0005;
+        scene.add(sunLight);
+
+        // Iluminação dedicada sob o assoalho do carro para destacar o módulo receptor WPT-RX
+        const underCarLight = new THREE.PointLight(0xffffff, 2.2, 5.0);
+        underCarLight.position.set(0, 0.02, 2.0);
+        scene.add(underCarLight);
+
+        // ============================================================
+        // 7. TEXTURAS PBR & URBANISMO BRASILEIRO (POSTES DUPLO T)
+        // ============================================================
+        function configurarTextura(canvas, repX, repY, isSRGB = true) {
+            const tex = new THREE.CanvasTexture(canvas);
+            tex.wrapS = THREE.RepeatWrapping;
+            tex.wrapT = THREE.RepeatWrapping;
+            tex.repeat.set(repX, repY);
+            tex.anisotropy = maxAnisotropy;
+            if (isSRGB) tex.encoding = THREE.sRGBEncoding;
+            return tex;
+        }
+
+        function criarTexturasAsfalto() {
+            const c = document.createElement("canvas");
+            c.width = 512; c.height = 512;
+            const ctx = c.getContext("2d");
+            ctx.fillStyle = "#262a30";
+            ctx.fillRect(0, 0, 512, 512);
+            for (let i = 0; i < 28000; i++) {
+                const x = Math.random() * 512, y = Math.random() * 512;
+                const v = 25 + Math.floor(Math.random() * 48);
+                ctx.fillStyle = `rgb(${v},${v + 2},${v + 5})`;
+                ctx.fillRect(x, y, 1.5, 1.5);
+            }
+            const grad = ctx.createLinearGradient(0, 0, 512, 0);
+            grad.addColorStop(0.0, "rgba(0,0,0,0)");
+            grad.addColorStop(0.32, "rgba(10,12,15,0.22)");
+            grad.addColorStop(0.50, "rgba(255,255,255,0.02)");
+            grad.addColorStop(0.68, "rgba(10,12,15,0.22)");
+            grad.addColorStop(1.0, "rgba(0,0,0,0)");
+            ctx.fillStyle = grad;
+            ctx.fillRect(0, 0, 512, 512);
+            return {
+                map: configurarTextura(c, 6, 18, true),
+                bumpMap: configurarTextura(c, 6, 18, false)
+            };
+        }
+
+        function criarTexturasCalcada() {
+            const c = document.createElement("canvas");
+            c.width = 512; c.height = 512;
+            const ctx = c.getContext("2d");
+            ctx.fillStyle = "#b5bac2";
+            ctx.fillRect(0, 0, 512, 512);
+            for (let i = 0; i < 16000; i++) {
+                const x = Math.random() * 512, y = Math.random() * 512;
+                const v = 160 + Math.floor(Math.random() * 40);
+                ctx.fillStyle = `rgb(${v},${v},${v - 3})`;
+                ctx.fillRect(x, y, 2, 2);
+            }
+            ctx.strokeStyle = "#7c828d";
+            ctx.lineWidth = 4;
+            for (let pos = 0; pos <= 512; pos += 128) {
+                ctx.beginPath(); ctx.moveTo(pos, 0); ctx.lineTo(pos, 512); ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(0, pos); ctx.lineTo(512, pos); ctx.stroke();
+            }
+            return {
+                map: configurarTextura(c, 5, 24, true),
+                bumpMap: configurarTextura(c, 5, 24, false)
+            };
+        }
+
+        function criarTexturasGrama() {
+            const c = document.createElement("canvas");
+            c.width = 512; c.height = 512;
+            const ctx = c.getContext("2d");
+            ctx.fillStyle = "#2d5a27";
+            ctx.fillRect(0, 0, 512, 512);
+            const tons = ["#366b2f", "#24491f", "#457d38", "#3b6e2c", "#528a3e"];
+            for (let i = 0; i < 24000; i++) {
+                const x = Math.random() * 512, y = Math.random() * 512;
+                ctx.strokeStyle = tons[i % tons.length];
+                ctx.lineWidth = 1.4;
+                ctx.beginPath();
+                ctx.moveTo(x, y);
+                ctx.lineTo(x + (Math.random() - 0.5) * 4, y - 4 - Math.random() * 6);
+                ctx.stroke();
+            }
+            return {
+                map: configurarTextura(c, 8, 30, true),
+                bumpMap: configurarTextura(c, 8, 30, false)
+            };
+        }
+
+        function criarTexturaCasca() {
+            const c = document.createElement("canvas");
+            c.width = 256; c.height = 256;
+            const ctx = c.getContext("2d");
+            ctx.fillStyle = "#4a3525";
+            ctx.fillRect(0, 0, 256, 256);
+            for (let i = 0; i < 1200; i++) {
+                const x = Math.random() * 256, y = Math.random() * 256;
+                ctx.fillStyle = i % 2 === 0 ? "#362519" : "#5e4532";
+                ctx.fillRect(x, y, 2, 14 + Math.random() * 18);
+            }
+            return configurarTextura(c, 2, 3, true);
+        }
+
+        function criarTexturaPisoTatil() {
+            const c = document.createElement("canvas");
+            c.width = 128; c.height = 128;
+            const ctx = c.getContext("2d");
+            ctx.fillStyle = "#eab308";
+            ctx.fillRect(0, 0, 128, 128);
+            ctx.fillStyle = "#ca8a04";
+            for (let y = 16; y < 128; y += 32) {
+                for (let x = 16; x < 128; x += 32) {
+                    ctx.beginPath();
+                    ctx.arc(x, y, 7, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+            return configurarTextura(c, 2, 95, true);
+        }
+
+        const texAsfalto   = criarTexturasAsfalto();
+        const texCalcada   = criarTexturasCalcada();
+        const texGrama     = criarTexturasGrama();
+        const texCasca     = criarTexturaCasca();
+        const texPisoTatil = criarTexturaPisoTatil();
+
+        const pista = new THREE.Mesh(
+            new THREE.PlaneGeometry(16, 52),
+            new THREE.MeshStandardMaterial({
+                map: texAsfalto.map,
+                bumpMap: texAsfalto.bumpMap,
+                bumpScale: 0.015,
+                roughness: 0.88,
+                metalness: 0.05,
+                side: THREE.DoubleSide
+            })
+        );
+        pista.rotation.x = -Math.PI / 2;
+        pista.receiveShadow = true;
+        scene.add(pista);
+
+        const calcadaMat = new THREE.MeshStandardMaterial({
+            map: texCalcada.map,
+            bumpMap: texCalcada.bumpMap,
+            bumpScale: 0.01,
+            roughness: 0.82
+        });
+        const meioFioMat = new THREE.MeshStandardMaterial({ color: 0x9ca3af, roughness: 0.75 });
+        const pisoTatilMat = new THREE.MeshStandardMaterial({ map: texPisoTatil, roughness: 0.7 });
+        const gramaMat = new THREE.MeshStandardMaterial({
+            map: texGrama.map,
+            bumpMap: texGrama.bumpMap,
+            bumpScale: 0.025,
+            roughness: 0.92
+        });
+
+        [-1, 1].forEach((lado) => {
+            const calcada = new THREE.Mesh(new THREE.BoxGeometry(10, 0.16, 52), calcadaMat);
+            calcada.position.set(lado * 13.15, 0.08, 0);
+            calcada.receiveShadow = true;
+            scene.add(calcada);
+
+            const meioFio = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.18, 52), meioFioMat);
+            meioFio.position.set(lado * 8.05, 0.09, 0);
+            meioFio.receiveShadow = true;
+            scene.add(meioFio);
+
+            const pisoTatil = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.012, 51.6), pisoTatilMat);
+            pisoTatil.position.set(lado * 8.42, 0.166, 0);
+            pisoTatil.receiveShadow = true;
+            scene.add(pisoTatil);
+
+            const grama = new THREE.Mesh(new THREE.BoxGeometry(8.2, 0.04, 51.2), gramaMat);
+            grama.position.set(lado * 13.8, 0.17, 0);
+            grama.receiveShadow = true;
+            scene.add(grama);
+        });
+
+        function criarPosteEnergiaBrasil(x, z, lado, comTransformador = false, comRamalTotem = false) {
+            const posteGroup = new THREE.Group();
+            posteGroup.position.set(x, 0.16, z);
+
+            const concretoMat = new THREE.MeshStandardMaterial({
+                color: 0xa8afb8,
+                bumpMap: texCalcada.bumpMap,
+                bumpScale: 0.008,
+                roughness: 0.86
+            });
+            const concretoEscuroMat = new THREE.MeshStandardMaterial({ color: 0x7d8590, roughness: 0.9 });
+            const acoGalvMat = new THREE.MeshStandardMaterial({ color: 0xcbd5e1, metalness: 0.78, roughness: 0.28 });
+
+            const corpoPoste = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.13, 0.24, 9.2, 12),
+                concretoMat
+            );
+            corpoPoste.position.y = 4.6;
+            corpoPoste.castShadow = true;
+            corpoPoste.receiveShadow = true;
+            posteGroup.add(corpoPoste);
+
+            [-1, 1].forEach((face) => {
+                const canaleta = new THREE.Mesh(new THREE.BoxGeometry(0.03, 8.6, 0.12), concretoEscuroMat);
+                canaleta.position.set(face * 0.14, 4.4, 0);
+                posteGroup.add(canaleta);
+            });
+
+            const cruzeta = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.14, 0.14), concretoEscuroMat);
+            cruzeta.position.set(0, 8.75, 0);
+            cruzeta.castShadow = true;
+            posteGroup.add(cruzeta);
+
+            [-0.45, 0.45].forEach((mx) => {
+                const maoFrancesa = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.72, 0.04), acoGalvMat);
+                maoFrancesa.position.set(mx * 0.65, 8.45, 0);
+                maoFrancesa.rotation.z = mx > 0 ? -0.65 : 0.65;
+                posteGroup.add(maoFrancesa);
+            });
+
+            const porcelanaMat = new THREE.MeshStandardMaterial({ color: 0x7c2d12, roughness: 0.22, metalness: 0.15 });
+            [-0.85, 0, 0.85].forEach((ix) => {
+                const isolador = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.075, 0.18, 16), porcelanaMat);
+                isolador.position.set(ix, 8.90, 0);
+                posteGroup.add(isolador);
+            });
+
+            const dirRua = -lado;
+            const bracoLuz = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.042, 2.3, 12), acoGalvMat);
+            bracoLuz.position.set(dirRua * 1.1, 6.95, 0);
+            bracoLuz.rotation.z = dirRua * (Math.PI / 2 - 0.18);
+            bracoLuz.castShadow = true;
+            posteGroup.add(bracoLuz);
+
+            const luminaria = new THREE.Mesh(
+                new THREE.BoxGeometry(0.55, 0.09, 0.24),
+                new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.6, roughness: 0.35 })
+            );
+            luminaria.position.set(dirRua * 2.15, 7.12, 0);
+            const painelLed = new THREE.Mesh(
+                new THREE.PlaneGeometry(0.46, 0.18),
+                new THREE.MeshBasicMaterial({ color: 0xfffbeb })
+            );
+            painelLed.rotation.x = Math.PI / 2;
+            painelLed.position.set(dirRua * 2.15, 7.07, 0);
+            posteGroup.add(luminaria, painelLed);
+
+            if (comTransformador) {
+                const trafoMat = new THREE.MeshStandardMaterial({ color: 0x64748b, metalness: 0.55, roughness: 0.42 });
+                const tanqueTrafo = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.36, 1.05, 24), trafoMat);
+                tanqueTrafo.position.set(dirRua * 0.48, 5.75, 0);
+                tanqueTrafo.castShadow = true;
+                posteGroup.add(tanqueTrafo);
+
+                [-0.36, 0.36].forEach((az) => {
+                    const aleta = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.85, 0.08), trafoMat);
+                    aleta.position.set(dirRua * 0.48, 5.75, az);
+                    posteGroup.add(aleta);
+                });
+
+                [-0.18, 0, 0.18].forEach((bz) => {
+                    const bucha = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.055, 0.26, 12), porcelanaMat);
+                    bucha.position.set(dirRua * 0.48, 6.38, bz);
+                    posteGroup.add(bucha);
+                });
+
+                const eletroduto = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 5.4, 12), acoGalvMat);
+                eletroduto.position.set(dirRua * 0.21, 2.7, 0.10);
+                posteGroup.add(eletroduto);
+
+                const caixaMedidor = new THREE.Mesh(
+                    new THREE.BoxGeometry(0.34, 0.56, 0.24),
+                    new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.45, roughness: 0.45 })
+                );
+                caixaMedidor.position.set(dirRua * 0.26, 1.65, 0.12);
+                caixaMedidor.castShadow = true;
+                posteGroup.add(caixaMedidor);
+            }
+
+            if (comRamalTotem) {
+                const dutoSubterraneo = new THREE.Mesh(
+                    new THREE.BoxGeometry(7.8, 0.025, 0.16),
+                    new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.6 })
+                );
+                dutoSubterraneo.position.set(dirRua * 4.2, -0.15, 0);
+                posteGroup.add(dutoSubterraneo);
+            }
+
+            scene.add(posteGroup);
+        }
+
+        const zPostes = [-15.0, -1.2, 13.5];
+        zPostes.forEach((zp) => {
+            criarPosteEnergiaBrasil(-8.95, zp, -1, zp === -1.2, zp === -1.2);
+            criarPosteEnergiaBrasil( 8.95, zp,  1, false, false);
+        });
+
+        const caboRedeMat = new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.5 });
+        [-8.95, 8.95].forEach((xPoste) => {
+            [-0.85, 0, 0.85].forEach((offsetX) => {
+                const xCabo = xPoste + offsetX;
+                const yTopo = 8.98 + 0.16;
+                [[-25.0, -15.0], [-15.0, -1.2], [-1.2, 13.5], [13.5, 25.0]].forEach(([z1, z2]) => {
+                    const zMid = (z1 + z2) / 2;
+                    const flecha = Math.abs(z2 - z1) * 0.032;
+                    const curva = new THREE.CatmullRomCurve3([
+                        new THREE.Vector3(xCabo, yTopo, z1),
+                        new THREE.Vector3(xCabo, yTopo - flecha, zMid),
+                        new THREE.Vector3(xCabo, yTopo, z2)
+                    ]);
+                    scene.add(new THREE.Mesh(new THREE.TubeGeometry(curva, 16, 0.016, 6, false), caboRedeMat));
+                });
+            });
+        });
+
+        // Vaga de recarga
+        const vagaGroup = new THREE.Group();
+        const areaVaga = new THREE.Mesh(
+            new THREE.PlaneGeometry(3.4, 6.2),
+            new THREE.MeshStandardMaterial({
+                color: 0x1e293b,
+                bumpMap: texAsfalto.bumpMap,
+                bumpScale: 0.01,
+                roughness: 0.8
+            })
+        );
+        areaVaga.rotation.x = -Math.PI / 2;
+        areaVaga.position.set(0, 0.006, 2.45);
+        areaVaga.receiveShadow = true;
+        vagaGroup.add(areaVaga);
+
+        const faixaTintaMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.65 });
+        const faixaEsq = new THREE.Mesh(new THREE.PlaneGeometry(0.14, 6.2), faixaTintaMat);
+        faixaEsq.rotation.x = -Math.PI / 2;
+        faixaEsq.position.set(-1.75, 0.012, 2.45);
+
+        const faixaDir = faixaEsq.clone();
+        faixaDir.position.x = 1.75;
+
+        const faixaFundo = new THREE.Mesh(new THREE.PlaneGeometry(3.64, 0.14), faixaTintaMat);
+        faixaFundo.rotation.x = -Math.PI / 2;
+        faixaFundo.position.set(0, 0.012, 5.55);
+
+        const faixaFrente = faixaFundo.clone();
+        faixaFrente.position.z = -0.65;
+
+        vagaGroup.add(faixaEsq, faixaDir, faixaFundo, faixaFrente);
+        scene.add(vagaGroup);
+
+        // ============================================================
+        // 8. ÁRVORES ORGÂNICAS & COBERTURA SOLAR
+        // ============================================================
+        function criarArvoreOrganica(x, z, escala = 1.0, seed = 1) {
+            const arvore = new THREE.Group();
+            const sombraChao = new THREE.Mesh(
+                new THREE.CircleGeometry(2.1 * escala, 24),
+                new THREE.MeshBasicMaterial({ color: 0x0f1f0d, transparent: true, opacity: 0.32 })
+            );
+            sombraChao.rotation.x = -Math.PI / 2;
+            sombraChao.position.y = 0.025;
+            arvore.add(sombraChao);
+
+            const troncoMat = new THREE.MeshStandardMaterial({ map: texCasca, roughness: 0.9 });
+            const tronco = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.13 * escala, 0.26 * escala, 2.3 * escala, 12),
+                troncoMat
+            );
+            tronco.position.y = 1.15 * escala;
+            tronco.castShadow = true;
+            tronco.receiveShadow = true;
+            arvore.add(tronco);
+
+            [
+                { rx: 0.35, rz: 0.32, y: 1.95, h: 1.1 },
+                { rx: -0.32, rz: -0.28, y: 2.05, h: 1.05 },
+                { rx: 0.15, rz: -0.38, y: 2.15, h: 1.0 }
+            ].forEach((g) => {
+                const galho = new THREE.Mesh(
+                    new THREE.CylinderGeometry(0.06 * escala, 0.11 * escala, g.h * escala, 8),
+                    troncoMat
+                );
+                galho.position.set(Math.sin(g.rz) * 0.35 * escala, g.y * escala, Math.sin(g.rx) * 0.35 * escala);
+                galho.rotation.set(g.rx, 0, g.rz);
+                galho.castShadow = true;
+                arvore.add(galho);
+            });
+
+            const tonsFolha = [0x244f20, 0x2f6329, 0x1d4019, 0x387030];
+            [
+                { x: 0.0,  y: 3.15, z: 0.0,  r: 1.18, cor: 0 },
+                { x: -0.85, y: 2.75, z: 0.45, r: 0.92, cor: 1 },
+                { x: 0.88, y: 2.80, z: 0.35, r: 0.95, cor: 2 },
+                { x: 0.25, y: 2.72, z: -0.85, r: 0.94, cor: 1 },
+                { x: -0.55, y: 2.85, z: -0.62, r: 0.86, cor: 3 },
+                { x: 0.58, y: 3.35, z: -0.25, r: 0.82, cor: 3 },
+                { x: -0.35, y: 3.42, z: 0.32, r: 0.80, cor: 1 }
+            ].forEach((cl, idx) => {
+                const geo = new THREE.DodecahedronGeometry(cl.r * escala, 1);
+                const pos = geo.attributes.position;
+                for (let i = 0; i < pos.count; i++) {
+                    const vx = pos.getX(i), vy = pos.getY(i), vz = pos.getZ(i);
+                    const ruido = 0.88 + 0.22 * Math.sin(vx * 3.7 + seed + idx) * Math.cos(vz * 3.3 + vy * 2.1);
+                    pos.setXYZ(i, vx * ruido, vy * (ruido * 0.92), vz * ruido);
+                }
+                geo.computeVertexNormals();
+                const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
+                    color: tonsFolha[cl.cor],
+                    roughness: 0.85,
+                    flatShading: true
+                }));
+                mesh.position.set(cl.x * escala, cl.y * escala, cl.z * escala);
+                mesh.castShadow = true;
+                mesh.receiveShadow = true;
+                arvore.add(mesh);
+            });
+
+            arvore.position.set(x, 0.17, z);
+            scene.add(arvore);
+        }
+
+        criarArvoreOrganica(-12.2, -7.5, 1.05, 1);
+        criarArvoreOrganica(-12.5,  6.5, 1.15, 2);
+        criarArvoreOrganica(-12.0, 18.5, 0.95, 3);
+        criarArvoreOrganica( 12.2, -7.5, 1.10, 4);
+        criarArvoreOrganica( 12.5,  6.5, 1.00, 5);
+        criarArvoreOrganica( 12.0, 18.5, 1.12, 6);
+
+        const acoEstruturalMat = new THREE.MeshStandardMaterial({ color: 0xdbe2ea, metalness: 0.6, roughness: 0.35 });
+        const acoEscuroMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.7, roughness: 0.35 });
+
+        [-4.8, 4.8].forEach((px) => {
+            const sapata = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.08, 0.65), acoEscuroMat);
+            sapata.position.set(px, 0.04, -1.6);
+            sapata.receiveShadow = true;
+
+            const pilar = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.20, 6.2, 24), acoEstruturalMat);
+            pilar.position.set(px, 3.1, -1.6);
+            pilar.castShadow = true;
+            pilar.receiveShadow = true;
+
+            const braco = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.22, 5.2), acoEstruturalMat);
+            braco.position.set(px, 6.15, 0.8);
+            braco.castShadow = true;
+
+            scene.add(sapata, pilar, braco);
+        });
+
+        const tetoBase = new THREE.Mesh(new THREE.BoxGeometry(11.6, 0.38, 6.8), acoEstruturalMat);
+        tetoBase.position.set(0, 6.42, 1.1);
+        tetoBase.castShadow = true;
+        tetoBase.receiveShadow = true;
+        scene.add(tetoBase);
+
+        const faixaTesteira = new THREE.Mesh(
+            new THREE.BoxGeometry(11.66, 0.16, 6.86),
+            new THREE.MeshStandardMaterial({ color: 0x0284c7, roughness: 0.4, metalness: 0.2 })
+        );
+        faixaTesteira.position.set(0, 6.32, 1.1);
+        scene.add(faixaTesteira);
+
+        const solarMat = new THREE.MeshStandardMaterial({ color: 0x0f294a, metalness: 0.75, roughness: 0.2 });
+        for (let sx = -4.2; sx <= 4.2; sx += 2.1) {
+            for (let sz = -0.8; sz <= 2.8; sz += 1.8) {
+                const painel = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.06, 1.6), solarMat);
+                painel.position.set(sx, 6.64, sz);
+                scene.add(painel);
+            }
+        }
+
+        // ============================================================
+        // 9. TOTEM INDUSTRIAL + DISPLAY DIGITAL + SENSOR HC-SR04 + PLACA ESP32-S3
+        // ============================================================
+        const canvasTela = document.getElementById("totem-screen-canvas");
+        const ctxTela = canvasTela.getContext("2d");
+        const texturaTela = new THREE.CanvasTexture(canvasTela);
+        texturaTela.anisotropy = maxAnisotropy;
+
+        function atualizarDisplayTotem(linha1, linha2, corBorda = "#ff4d4d") {
+            ctxTela.fillStyle = "#060e1f";
+            ctxTela.fillRect(0, 0, 512, 256);
+            ctxTela.strokeStyle = corBorda;
+            ctxTela.lineWidth = 10;
+            ctxTela.strokeRect(8, 8, 496, 240);
+            ctxTela.fillStyle = corBorda;
+            ctxTela.font = "bold 34px monospace";
+            ctxTela.textAlign = "center";
+            ctxTela.fillText(linha1, 256, 96);
+            ctxTela.fillStyle = "#ffffff";
+            ctxTela.font = "bold 46px monospace";
+            ctxTela.fillText(linha2, 256, 186);
+            texturaTela.needsUpdate = true;
+        }
+        atualizarDisplayTotem("AGUARDANDO EV", "DIST: 3.50m", "#ff4d4d");
+
+        const totemGroup = new THREE.Group();
+        totemGroup.position.set(0, 0, -1.2);
+
+        const ilhaConcreto = new THREE.Mesh(
+            new THREE.BoxGeometry(2.4, 0.10, 1.45),
+            new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.85 })
+        );
+        ilhaConcreto.position.set(0, 0.05, 0);
+        ilhaConcreto.receiveShadow = true;
+        totemGroup.add(ilhaConcreto);
+
+        [-0.95, 0.95].forEach((bx) => {
+            const balizador = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.065, 0.065, 0.85, 20),
+                new THREE.MeshStandardMaterial({ color: 0xfacc15, metalness: 0.35, roughness: 0.35 })
+            );
+            balizador.position.set(bx, 0.50, 0.42);
+            balizador.castShadow = true;
+            const topoBalizador = new THREE.Mesh(
+                new THREE.SphereGeometry(0.065, 16, 12),
+                new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.4 })
+            );
+            topoBalizador.position.set(bx, 0.92, 0.42);
+            totemGroup.add(balizador, topoBalizador);
+        });
+
+        const corpoTotem = new THREE.Mesh(
+            new THREE.BoxGeometry(1.36, 3.45, 0.68),
+            new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.55, roughness: 0.38 })
+        );
+        corpoTotem.position.y = 1.82;
+        corpoTotem.castShadow = true;
+        corpoTotem.receiveShadow = true;
+        totemGroup.add(corpoTotem);
+
+        const painelFrontalTotem = new THREE.Mesh(
+            new THREE.BoxGeometry(1.16, 3.15, 0.04),
+            new THREE.MeshStandardMaterial({ color: 0x0f172a, metalness: 0.45, roughness: 0.42 })
+        );
+        painelFrontalTotem.position.set(0, 1.82, 0.34);
+        totemGroup.add(painelFrontalTotem);
+
+        const totemLedStripMat = new THREE.MeshStandardMaterial({
+            color: 0xff4d4d,
+            emissive: 0xff2222,
+            emissiveIntensity: 1.4
+        });
+        [-0.63, 0.63].forEach((lx) => {
+            const strip = new THREE.Mesh(new THREE.BoxGeometry(0.025, 2.95, 0.03), totemLedStripMat);
+            strip.position.set(lx, 1.82, 0.345);
+            totemGroup.add(strip);
+        });
+
+        const displayDigital = new THREE.Mesh(
+            new THREE.PlaneGeometry(0.92, 0.52),
+            new THREE.MeshBasicMaterial({ map: texturaTela })
+        );
+        displayDigital.position.set(0, 2.48, 0.365);
+        totemGroup.add(displayDigital);
+
+        // ============================================================
+        // PAINEL DE INSPEÇÃO DA PLACA ESP32-S3 FÍSICA NO TOTEM
+        // ============================================================
+        const espLedPwrMat = new THREE.MeshStandardMaterial({ color: 0xff2222, emissive: 0xff1111, emissiveIntensity: 1.6 });
+        const espLedWifiMat = new THREE.MeshStandardMaterial({ color: 0x0f2942, emissive: 0x000000, emissiveIntensity: 0.0 });
+        const espLedTxMat = new THREE.MeshStandardMaterial({ color: 0x0f3b26, emissive: 0x000000, emissiveIntensity: 0.0 });
+
+        function criarModuloESP32NoTotem() {
+            const espGroup = new THREE.Group();
+            const moldura = new THREE.Mesh(
+                new THREE.BoxGeometry(0.76, 0.44, 0.03),
+                new THREE.MeshStandardMaterial({ color: 0x020617, roughness: 0.4, metalness: 0.6 })
+            );
+            espGroup.add(moldura);
+
+            const pcbEsp = new THREE.Mesh(
+                new THREE.BoxGeometry(0.46, 0.24, 0.014),
+                new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.35 })
+            );
+            pcbEsp.position.set(-0.08, 0, 0.018);
+            espGroup.add(pcbEsp);
+
+            const wroomCanvas = document.createElement("canvas");
+            wroomCanvas.width = 256; wroomCanvas.height = 192;
+            const wctx = wroomCanvas.getContext("2d");
+            wctx.fillStyle = "#cbd5e1";
+            wctx.fillRect(0, 0, 256, 192);
+            wctx.fillStyle = "#1e293b";
+            wctx.font = "bold 24px monospace";
+            wctx.textAlign = "center";
+            wctx.fillText("ESPRESSIF", 128, 74);
+            wctx.font = "bold 22px monospace";
+            wctx.fillText("ESP32-S3", 128, 114);
+            wctx.font = "16px monospace";
+            wctx.fillText("Wi-Fi + MQTT", 128, 150);
+
+            const wroomTex = new THREE.CanvasTexture(wroomCanvas);
+            const shield = new THREE.Mesh(
+                new THREE.BoxGeometry(0.18, 0.14, 0.016),
+                new THREE.MeshStandardMaterial({ map: wroomTex, metalness: 0.85, roughness: 0.25 })
+            );
+            shield.position.set(-0.17, 0.01, 0.032);
+            espGroup.add(shield);
+
+            [-0.04, 0.05].forEach((uy) => {
+                const usb = new THREE.Mesh(
+                    new THREE.BoxGeometry(0.05, 0.055, 0.022),
+                    new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.9, roughness: 0.2 })
+                );
+                usb.position.set(0.13, uy, 0.032);
+                espGroup.add(usb);
+            });
+
+            const ledPwr = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.014, 0.012), espLedPwrMat);
+            ledPwr.position.set(0.02, 0.06, 0.030);
+
+            const ledWifi = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.014, 0.012), espLedWifiMat);
+            ledWifi.position.set(0.02, 0.01, 0.030);
+
+            const ledTx = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.014, 0.012), espLedTxMat);
+            ledTx.position.set(0.02, -0.04, 0.030);
+
+            espGroup.add(ledPwr, ledWifi, ledTx);
+
+            const coresFios = [0xdc2626, 0xfacc15, 0x22c55e, 0x111827];
+            coresFios.forEach((cor, idx) => {
+                const offset = -0.045 + idx * 0.03;
+                const curvaFio = new THREE.CatmullRomCurve3([
+                    new THREE.Vector3(offset - 0.08, -0.11, 0.024),
+                    new THREE.Vector3(offset - 0.04, -0.26, 0.038),
+                    new THREE.Vector3(offset * 0.8, -0.44, 0.016)
+                ]);
+                const fio = new THREE.Mesh(
+                    new THREE.TubeGeometry(curvaFio, 12, 0.0045, 6, false),
+                    new THREE.MeshStandardMaterial({ color: cor, roughness: 0.45 })
+                );
+                espGroup.add(fio);
+            });
+
+            const visorAcrilico = new THREE.Mesh(
+                new THREE.BoxGeometry(0.74, 0.42, 0.006),
+                new THREE.MeshStandardMaterial({
+                    color: 0xe0f2fe,
+                    transparent: true,
+                    opacity: 0.18,
+                    roughness: 0.1,
+                    metalness: 0.1
+                })
+            );
+            visorAcrilico.position.z = 0.046;
+            espGroup.add(visorAcrilico);
+
+            return espGroup;
+        }
+
+        const moduloEsp32Totem = criarModuloESP32NoTotem();
+        moduloEsp32Totem.position.set(0, 1.48, 0.365);
+        totemGroup.add(moduloEsp32Totem);
+
+        // Sensor Ultrassônico HC-SR04 Realista
+        function criarTexturaTelaAcustica() {
+            const c = document.createElement("canvas");
+            c.width = 256; c.height = 256;
+            const ctx = c.getContext("2d");
+            ctx.fillStyle = "#9ca3af";
+            ctx.fillRect(0, 0, 256, 256);
+            const passo = 8;
+            for (let y = 4; y < 256; y += passo) {
+                const offset = (Math.floor(y / passo) % 2) * (passo / 2);
+                for (let x = 4; x < 256; x += passo) {
+                    ctx.fillStyle = "#1f2937";
+                    ctx.beginPath(); ctx.arc(x + offset, y, 2.2, 0, Math.PI * 2); ctx.fill();
+                    ctx.fillStyle = "#e5e7eb";
+                    ctx.beginPath(); ctx.arc(x + offset - 0.6, y - 0.6, 0.9, 0, Math.PI * 2); ctx.fill();
+                }
+            }
+            const tex = new THREE.CanvasTexture(c);
+            tex.anisotropy = maxAnisotropy;
+            tex.encoding = THREE.sRGBEncoding;
+            return tex;
+        }
+
+        function criarSensorHCSR04Realista() {
+            const sensorGroup = new THREE.Group();
+            const pcbCanvas = document.createElement("canvas");
+            pcbCanvas.width = 1024; pcbCanvas.height = 512;
+            const pctx = pcbCanvas.getContext("2d");
+
+            pctx.fillStyle = "#083b7a";
+            pctx.fillRect(0, 0, 1024, 512);
+            pctx.strokeStyle = "#0c4da2";
+            pctx.lineWidth = 6;
+            pctx.strokeRect(18, 18, 988, 476);
+
+            [[44, 44], [980, 44], [44, 468], [980, 468]].forEach(([hx, hy]) => {
+                pctx.fillStyle = "#d1d5db";
+                pctx.beginPath(); pctx.arc(hx, hy, 22, 0, Math.PI * 2); pctx.fill();
+                pctx.fillStyle = "#0f172a";
+                pctx.beginPath(); pctx.arc(hx, hy, 12, 0, Math.PI * 2); pctx.fill();
+            });
+
+            pctx.fillStyle = "#f8fafc";
+            pctx.textAlign = "center";
+            pctx.font = "bold 36px monospace";
+            pctx.fillText("HC-SR04", 512, 265);
+            pctx.font = "bold 32px monospace";
+            pctx.fillText("T", 212, 468);
+            pctx.fillText("R", 812, 468);
+            pctx.font = "bold 22px monospace";
+            pctx.fillText("VCC  Trig  Echo  GND", 512, 452);
+
+            const pcbTex = new THREE.CanvasTexture(pcbCanvas);
+            pcbTex.anisotropy = maxAnisotropy;
+            pcbTex.encoding = THREE.sRGBEncoding;
+
+            const pcbEdgeMat = new THREE.MeshStandardMaterial({ color: 0x062d5e, roughness: 0.45 });
+            const pcbFrontMat = new THREE.MeshStandardMaterial({ map: pcbTex, roughness: 0.35, metalness: 0.1 });
+
+            sensorGroup.add(new THREE.Mesh(
+                new THREE.BoxGeometry(0.45, 0.20, 0.016),
+                [pcbEdgeMat, pcbEdgeMat, pcbEdgeMat, pcbEdgeMat, pcbFrontMat, pcbEdgeMat]
+            ));
+
+            const metalBrushedMat = new THREE.MeshStandardMaterial({
+                color: 0xe2e8f0,
+                metalness: 0.88,
+                roughness: 0.20
+            });
+            const cristalOsc = new THREE.Mesh(new THREE.BoxGeometry(0.044, 0.020, 0.016), metalBrushedMat);
+            cristalOsc.position.set(0, 0.064, 0.014);
+            sensorGroup.add(cristalOsc);
+
+            const texMalha = criarTexturaTelaAcustica();
+            const malhaAcusticaMat = new THREE.MeshStandardMaterial({
+                map: texMalha,
+                bumpMap: texMalha,
+                bumpScale: 0.004,
+                metalness: 0.78,
+                roughness: 0.28
+            });
+            const borrachaPretaMat = new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.75 });
+
+            [-0.132, 0.132].forEach((posX) => {
+                const transdutorGroup = new THREE.Group();
+                transdutorGroup.position.set(posX, 0.006, 0.008);
+
+                const cilindroAlu = new THREE.Mesh(
+                    new THREE.CylinderGeometry(0.068, 0.068, 0.076, 48),
+                    metalBrushedMat
+                );
+                cilindroAlu.rotation.x = Math.PI / 2;
+                cilindroAlu.position.z = 0.038;
+                transdutorGroup.add(cilindroAlu);
+
+                const anelPreto = new THREE.Mesh(new THREE.RingGeometry(0.055, 0.064, 48), borrachaPretaMat);
+                anelPreto.position.z = 0.0765;
+                transdutorGroup.add(anelPreto);
+
+                const telaAcustica = new THREE.Mesh(new THREE.CircleGeometry(0.055, 48), malhaAcusticaMat);
+                telaAcustica.position.z = 0.0762;
+                transdutorGroup.add(telaAcustica);
+
+                sensorGroup.add(transdutorGroup);
+            });
+
+            const headerPlastic = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.016, 0.018), borrachaPretaMat);
+            headerPlastic.position.set(0, -0.095, -0.012);
+            sensorGroup.add(headerPlastic);
+
+            const pinoOuroMat = new THREE.MeshStandardMaterial({ color: 0xfbbf24, metalness: 0.9, roughness: 0.18 });
+            [-0.038, -0.013, 0.013, 0.038].forEach((px) => {
+                const pino = new THREE.Mesh(new THREE.BoxGeometry(0.005, 0.038, 0.005), pinoOuroMat);
+                pino.position.set(px, -0.112, -0.012);
+                sensorGroup.add(pino);
+            });
+
+            return sensorGroup;
+        }
+
+        const sensorHCSR04 = criarSensorHCSR04Realista();
+        sensorHCSR04.position.set(0, 0.78, 0.368);
+        totemGroup.add(sensorHCSR04);
+
+        const ondasUltrassonicas = [];
+        for (let w = 0; w < 3; w++) {
+            const onda = new THREE.Mesh(
+                new THREE.RingGeometry(0.08, 0.095, 32, 1, -Math.PI * 0.35, Math.PI * 0.7),
+                new THREE.MeshBasicMaterial({
+                    color: 0x00f2ff,
+                    transparent: true,
+                    opacity: 0.45,
+                    side: THREE.DoubleSide
+                })
+            );
+            onda.rotation.x = -Math.PI / 2;
+            onda.position.set(-0.132, 0.78, 0.48);
+            totemGroup.add(onda);
+            ondasUltrassonicas.push({ mesh: onda, fase: w / 3 });
+        }
+
+        scene.add(totemGroup);
+
+        // ============================================================
+        // 10. MÓDULO INDUTOR TRANSMISSOR FIXO (COM LEDS VERMELHO E AZUL)
+        // ============================================================
+        const POS_Z_PLATAFORMA = 2.0;
+        const plataformaFixa = new THREE.Group();
+        plataformaFixa.position.set(0, 0.025, POS_Z_PLATAFORMA);
+
+        const chassiTx = new THREE.Mesh(
+            new THREE.BoxGeometry(0.78, 0.026, 1.04),
+            new THREE.MeshStandardMaterial({ color: 0x3f444e, metalness: 0.55, roughness: 0.45 })
+        );
+        chassiTx.position.y = -0.008;
+        chassiTx.receiveShadow = true;
+        plataformaFixa.add(chassiTx);
+
+        const cantoneiraMat = new THREE.MeshStandardMaterial({ color: 0xfacc15, roughness: 0.35 });
+        [[-0.35, -0.48], [0.35, -0.48], [-0.35, 0.48], [0.35, 0.48]].forEach(([cx, cz]) => {
+            const canto = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.028, 0.08), cantoneiraMat);
+            canto.position.set(cx, -0.007, cz);
+            plataformaFixa.add(canto);
+        });
+
+        const deckTx = new THREE.Mesh(
+            new THREE.BoxGeometry(0.66, 0.028, 0.92),
+            new THREE.MeshStandardMaterial({ color: 0x646b77, metalness: 0.5, roughness: 0.4 })
+        );
+        deckTx.position.y = -0.005;
+        deckTx.receiveShadow = true;
+        plataformaFixa.add(deckTx);
+
+        const discoFerrite = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.265, 0.265, 0.004, 48),
+            new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.6 })
+        );
+        discoFerrite.position.y = 0.011;
+        plataformaFixa.add(discoFerrite);
+
+        const barraFerriteMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.6, roughness: 0.35 });
+        for (let i = 0; i < 16; i++) {
+            const ang = (i * Math.PI * 2) / 16;
+            const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.005, 0.20), barraFerriteMat);
+            spoke.position.set(Math.sin(ang) * 0.145, 0.013, Math.cos(ang) * 0.145);
+            spoke.rotation.y = ang;
+            plataformaFixa.add(spoke);
+        }
+
+        const bobinaTxMat = new THREE.MeshStandardMaterial({ color: 0xd99b52, metalness: 0.85, roughness: 0.22 });
+        [0.08, 0.12, 0.16, 0.20, 0.24].forEach((raio) => {
+            const espira = new THREE.Mesh(new THREE.TorusGeometry(raio, 0.0075, 12, 48), bobinaTxMat);
+            espira.rotation.x = Math.PI / 2;
+            espira.position.y = 0.019;
+            plataformaFixa.add(espira);
+        });
+
+        const tampaTranslucida = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.275, 0.275, 0.006, 48),
+            new THREE.MeshStandardMaterial({
+                color: 0xcbd5e1,
+                transparent: true,
+                opacity: 0.22,
+                roughness: 0.2
+            })
+        );
+        tampaTranslucida.position.y = 0.024;
+        plataformaFixa.add(tampaTranslucida);
+
+        const aneisFluxoWPT = [];
+        for (let f = 0; f < 3; f++) {
+            const anelFluxo = new THREE.Mesh(
+                new THREE.TorusGeometry(0.22, 0.005, 8, 48),
+                new THREE.MeshBasicMaterial({ color: 0x00a8ff, transparent: true, opacity: 0.0 })
+            );
+            anelFluxo.rotation.x = Math.PI / 2;
+            anelFluxo.position.y = 0.04;
+            plataformaFixa.add(anelFluxo);
+            aneisFluxoWPT.push({ mesh: anelFluxo, fase: f / 3 });
+        }
+
+        const ledVermelhoMat = new THREE.MeshStandardMaterial({
+            color: 0xff3b3b,
+            emissive: 0xff1e1e,
+            emissiveIntensity: 1.8,
+            roughness: 0.2
+        });
+
+        const ledAzulMat = new THREE.MeshStandardMaterial({
+            color: 0x1e3a5f,
+            emissive: 0x000000,
+            emissiveIntensity: 0.0,
+            roughness: 0.2
+        });
+
+        const barraLedVermelha = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.008, 0.72), ledVermelhoMat);
+        barraLedVermelha.position.set(-0.29, 0.012, -0.04);
+        const ledDomoVermelho = new THREE.Mesh(new THREE.SphereGeometry(0.018, 16, 16), ledVermelhoMat);
+        ledDomoVermelho.position.set(-0.22, 0.012, 0.39);
+
+        const barraLedAzul = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.008, 0.72), ledAzulMat);
+        barraLedAzul.position.set(0.29, 0.012, -0.04);
+        const ledDomoAzul = new THREE.Mesh(new THREE.SphereGeometry(0.018, 16, 16), ledAzulMat);
+        ledDomoAzul.position.set(0.22, 0.012, 0.39);
+
+        plataformaFixa.add(barraLedVermelha, ledDomoVermelho, barraLedAzul, ledDomoAzul);
+
+        const zonaPisoMat = new THREE.MeshBasicMaterial({
+            color: 0xff4d4d,
+            transparent: true,
+            opacity: 0.16,
+            side: THREE.DoubleSide
+        });
+        const tapeteZona = new THREE.Mesh(new THREE.PlaneGeometry(1.35, 1.75), zonaPisoMat);
+        tapeteZona.rotation.x = -Math.PI / 2;
+        tapeteZona.position.y = -0.014;
+        plataformaFixa.add(tapeteZona);
+
+        scene.add(plataformaFixa);
+
+        let indutorConectado = false;
+
+        function atualizarLEDsModuloIndutor(conectado, corZonaPisoHex, cssDotColor) {
+            indutorConectado = conectado;
+            zonaPisoMat.color.setHex(corZonaPisoHex);
+            totemLedStripMat.color.setHex(corZonaPisoHex);
+            totemLedStripMat.emissive.setHex(corZonaPisoHex);
+
+            const pillDot = document.getElementById("pill-status-dot");
+            if (pillDot && cssDotColor) {
+                pillDot.style.background = cssDotColor;
+                pillDot.style.boxShadow = `0 0 8px ${cssDotColor}`;
+            }
+
+            const elLedHud = document.getElementById("led-module-status");
+            if (conectado) {
+                ledAzulMat.color.setHex(0x00a8ff);
+                ledAzulMat.emissive.setHex(0x0088ff);
+                ledAzulMat.emissiveIntensity = 1.9;
+
+                ledVermelhoMat.color.setHex(0x4a1c1c);
+                ledVermelhoMat.emissive.setHex(0x000000);
+                ledVermelhoMat.emissiveIntensity = 0.0;
+
+                elLedHud.innerText = "LED Azul (Conectado)";
+                elLedHud.className = "status-pill pill-blue";
+            } else {
+                ledVermelhoMat.color.setHex(0xff3b3b);
+                ledVermelhoMat.emissive.setHex(0xff1e1e);
+                ledVermelhoMat.emissiveIntensity = 1.9;
+
+                ledAzulMat.color.setHex(0x1e3a5f);
+                ledAzulMat.emissive.setHex(0x000000);
+                ledAzulMat.emissiveIntensity = 0.0;
+
+                elLedHud.innerText = "LED Vermelho (Desconectado)";
+                elLedHud.className = "status-pill pill-off";
+            }
+        }
+
+        // ============================================================
+        // 11. RECEPTOR PASSIVO DETALHADO SOB O VEÍCULO (WPT-RX 85kHz)
+        // ============================================================
+        function criarEspiraRetangularArredondada(larguraExt, compExt, espessuraFio, raioCanto, altura) {
+            function criarPathRetangulo(w, h, r) {
+                const path = new THREE.Path();
+                const hw = w / 2, hh = h / 2;
+                const rc = Math.min(r, hw * 0.45, hh * 0.45);
+                path.moveTo(-hw + rc, -hh);
+                path.lineTo(hw - rc, -hh);
+                path.quadraticCurveTo(hw, -hh, hw, -hh + rc);
+                path.lineTo(hw, hh - rc);
+                path.quadraticCurveTo(hw, hh, hw - rc, hh);
+                path.lineTo(-hw + rc, hh);
+                path.quadraticCurveTo(-hw, hh, -hw, hh - rc);
+                path.lineTo(-hw, -hh + rc);
+                path.quadraticCurveTo(-hw, -hh, -hw + rc, -hh);
+                return path;
+            }
+
+            const shape = new THREE.Shape();
+            const hw = larguraExt / 2, hh = compExt / 2;
+            const rc = Math.min(raioCanto, hw * 0.45, hh * 0.45);
+            shape.moveTo(-hw + rc, -hh);
+            shape.lineTo(hw - rc, -hh);
+            shape.quadraticCurveTo(hw, -hh, hw, -hh + rc);
+            shape.lineTo(hw, hh - rc);
+            shape.quadraticCurveTo(hw, hh, hw - rc, hh);
+            shape.lineTo(-hw + rc, hh);
+            shape.quadraticCurveTo(-hw, hh, -hw, hh - rc);
+            shape.lineTo(-hw, -hh + rc);
+            shape.quadraticCurveTo(-hw, -hh, -hw + rc, -hh);
+
+            shape.holes.push(criarPathRetangulo(
+                larguraExt - espessuraFio * 2,
+                compExt - espessuraFio * 2,
+                Math.max(0.006, rc - espessuraFio)
+            ));
+
+            const geom = new THREE.ExtrudeGeometry(shape, {
+                depth: altura,
+                bevelEnabled: true,
+                bevelSegments: 2,
+                steps: 1,
+                bevelSize: 0.0015,
+                bevelThickness: 0.0015
+            });
+            geom.rotateX(Math.PI / 2);
+            return geom;
+        }
+
+        function criarReceptorPassivoEV() {
+            const rxGroup = new THREE.Group();
+
+            // Chapa de blindagem de alumínio escovado com borda luminosa sutil
+            const blindagemMat = new THREE.MeshStandardMaterial({
+                color: 0x94a3b8,
+                metalness: 0.72,
+                roughness: 0.28
+            });
+            const blindagem = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.018, 1.02), blindagemMat);
+            blindagem.position.set(0, 0.009, 0);
+            rxGroup.add(blindagem);
+
+            const parafusoMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.9, roughness: 0.2 });
+            [[-0.31, -0.40], [0.31, -0.40], [-0.31, 0.40], [0.31, 0.40]].forEach(([ax, az]) => {
+                const aba = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.014, 0.08), blindagemMat);
+                aba.position.set(ax, 0.009, az);
+                const parafuso = new THREE.Mesh(new THREE.CylinderGeometry(0.013, 0.013, 0.020, 12), parafusoMat);
+                parafuso.position.set(ax + (ax > 0 ? 0.008 : -0.008), 0.006, az);
+                rxGroup.add(aba, parafuso);
+            });
+
+            // Núcleo concentrador de ferrite
+            const ferrite = new THREE.Mesh(
+                new THREE.BoxGeometry(0.48, 0.012, 0.60),
+                new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.45, metalness: 0.2 })
+            );
+            ferrite.position.set(0, -0.004, -0.11);
+            rxGroup.add(ferrite);
+
+            // Espiras retangulares arredondadas de cobre Litz
+            const cobreRxMat = new THREE.MeshStandardMaterial({
+                color: 0xf59e0b,
+                emissive: 0x78350f,
+                emissiveIntensity: 0.25,
+                metalness: 0.85,
+                roughness: 0.20
+            });
+            [
+                { w: 0.41, l: 0.52, r: 0.032 },
+                { w: 0.365, l: 0.475, r: 0.026 },
+                { w: 0.32, l: 0.43, r: 0.020 },
+                { w: 0.275, l: 0.385, r: 0.015 }
+            ].forEach((cfg) => {
+                const mesh = new THREE.Mesh(
+                    criarEspiraRetangularArredondada(cfg.w, cfg.l, 0.014, cfg.r, 0.009),
+                    cobreRxMat
+                );
+                mesh.position.set(0, -0.010, -0.11);
+                rxGroup.add(mesh);
+            });
+
+            [-0.042, 0.042].forEach((fx) => {
+                const curvaFio = new THREE.CatmullRomCurve3([
+                    new THREE.Vector3(fx, -0.013, 0.145),
+                    new THREE.Vector3(fx * 1.18, -0.014, 0.195),
+                    new THREE.Vector3(fx, -0.013, 0.245)
+                ]);
+                rxGroup.add(new THREE.Mesh(new THREE.TubeGeometry(curvaFio, 12, 0.0045, 8, false), cobreRxMat));
+            });
+
+            // PCB retificadora e reguladora WPT-RX 85kHz
+            const pcbCanvas = document.createElement("canvas");
+            pcbCanvas.width = 256; pcbCanvas.height = 256;
+            const pctx = pcbCanvas.getContext("2d");
+            pctx.fillStyle = "#16a34a";
+            pctx.fillRect(0, 0, 256, 256);
+            pctx.strokeStyle = "#dcfce7";
+            pctx.lineWidth = 6;
+            pctx.strokeRect(8, 8, 240, 240);
+            pctx.fillStyle = "#e2e8f0";
+            pctx.fillRect(26, 26, 24, 24);
+            pctx.fillRect(206, 26, 24, 24);
+            pctx.fillStyle = "#ffffff";
+            pctx.font = "bold 18px monospace";
+            pctx.textAlign = "center";
+            pctx.fillText("WPT-RX 85kHz", 128, 36);
+            pctx.fillText("-  BAT  +", 128, 236);
+
+            const pcbTex = new THREE.CanvasTexture(pcbCanvas);
+            const pcbVerdeBaseMat = new THREE.MeshStandardMaterial({ color: 0x22c55e, roughness: 0.35 });
+            const pcbVerdeBottomMat = new THREE.MeshStandardMaterial({
+                map: pcbTex,
+                emissive: 0x064e3b,
+                emissiveIntensity: 0.35,
+                roughness: 0.35
+            });
+
+            const pcbVerde = new THREE.Mesh(
+                new THREE.BoxGeometry(0.25, 0.010, 0.23),
+                [pcbVerdeBaseMat, pcbVerdeBaseMat, pcbVerdeBaseMat, pcbVerdeBottomMat, pcbVerdeBaseMat, pcbVerdeBaseMat]
+            );
+            pcbVerde.position.set(0, -0.005, 0.355);
+            rxGroup.add(pcbVerde);
+
+            const ciCentral = new THREE.Mesh(
+                new THREE.BoxGeometry(0.060, 0.008, 0.060),
+                new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.3 })
+            );
+            ciCentral.position.set(0, -0.012, 0.355);
+            rxGroup.add(ciCentral);
+
+            const smdMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, metalness: 0.6, roughness: 0.3 });
+            [-0.075, 0.075].forEach((sx) => {
+                [0.305, 0.355, 0.405].forEach((sz) => {
+                    const smd = new THREE.Mesh(new THREE.BoxGeometry(0.028, 0.006, 0.018), smdMat);
+                    smd.position.set(sx, -0.012, sz);
+                    rxGroup.add(smd);
+                });
+            });
+
+            const caboPreto = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.007, 0.007, 0.11, 12),
+                new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.5 })
+            );
+            caboPreto.rotation.x = Math.PI / 2;
+            caboPreto.position.set(-0.072, -0.008, 0.515);
+
+            const caboVermelho = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.007, 0.007, 0.11, 12),
+                new THREE.MeshStandardMaterial({ color: 0xef4444, roughness: 0.4 })
+            );
+            caboVermelho.rotation.x = Math.PI / 2;
+            caboVermelho.position.set(0.072, -0.008, 0.515);
+
+            rxGroup.add(caboPreto, caboVermelho);
+            return rxGroup;
+        }
+
+        const carGroup = new THREE.Group();
+        const receptorEV = criarReceptorPassivoEV();
+        receptorEV.position.set(0, 0.105, 0);
+        carGroup.add(receptorEV);
+
+        atualizarProgressoSplash(65, "Carregando malha 3D do veículo elétrico e receptor inferior...");
+
+        const gltfLoader = new THREE.GLTFLoader();
+        gltfLoader.load(
+            "scene.gltf",
+            (gltf) => {
+                const carModel = gltf.scene;
+                const box = new THREE.Box3().setFromObject(carModel);
+                const size = box.getSize(new THREE.Vector3());
+                const center = box.getCenter(new THREE.Vector3());
+                carModel.position.x += (carModel.position.x - center.x);
+                carModel.position.y += (carModel.position.y - center.y);
+                carModel.position.z += (carModel.position.z - center.z);
+                carModel.scale.set(3.4 / size.z, 3.4 / size.z, 3.4 / size.z);
+                carModel.traverse((node) => { if (node.isMesh) node.castShadow = true; });
+                carGroup.add(carModel);
+
+                // Mede a altura real do assoalho nas coordenadas locais de carGroup (com carGroup na origem)
+                const savedZ = carGroup.position.z;
+                carGroup.position.set(0, 0, 0);
+                carGroup.updateMatrixWorld(true);
+
+                let minBellyY = Infinity;
+                const vTemp = new THREE.Vector3();
+                carModel.traverse((node) => {
+                    if (node.isMesh && node.geometry && node.geometry.attributes.position) {
+                        const pos = node.geometry.attributes.position;
+                        for (let i = 0; i < pos.count; i++) {
+                            vTemp.fromBufferAttribute(pos, i).applyMatrix4(node.matrixWorld);
+                            if (Math.abs(vTemp.x) < 0.42 && Math.abs(vTemp.z) < 0.70 && vTemp.y < minBellyY) {
+                                minBellyY = vTemp.y;
+                            }
+                        }
+                    }
+                });
+
+                carGroup.position.z = savedZ;
+                // Posiciona o receptor 1.8 cm ABAIXO do assoalho do carro para nunca ficar escondido dentro da malha escura
+                if (minBellyY < Infinity) {
+                    receptorEV.position.y = Math.max(0.068, minBellyY - 0.018);
+                } else {
+                    receptorEV.position.y = 0.092;
+                }
+                finalizarSplash();
+            },
+            undefined,
+            () => {
+                const chassi = new THREE.Mesh(
+                    new THREE.BoxGeometry(1.7, 0.65, 3.4),
+                    new THREE.MeshStandardMaterial({ color: 0x0284c7, metalness: 0.5, roughness: 0.25 })
+                );
+                chassi.position.y = 0.52;
+                chassi.castShadow = true;
+                const cabine = new THREE.Mesh(
+                    new THREE.BoxGeometry(1.5, 0.65, 1.8),
+                    new THREE.MeshStandardMaterial({ color: 0x0f172a, transparent: true, opacity: 0.85 })
+                );
+                cabine.position.set(0, 1.12, -0.2);
+                const rodaGeo = new THREE.CylinderGeometry(0.28, 0.28, 0.25, 24);
+                rodaGeo.rotateZ(Math.PI / 2);
+                const rodaMat = new THREE.MeshStandardMaterial({ color: 0x151515 });
+                [[-0.85, 1], [0.85, 1], [-0.85, -1], [0.85, -1]].forEach(([rx, rz]) => {
+                    const r = new THREE.Mesh(rodaGeo, rodaMat);
+                    r.position.set(rx, 0.28, rz);
+                    carGroup.add(r);
+                });
+                carGroup.add(chassi, cabine);
+                receptorEV.position.y = 0.175;
+                finalizarSplash();
+            }
+        );
+
+        carGroup.position.set(0, 0, POS_Z_PLATAFORMA + (distance - 0.45) * 1.1);
+        scene.add(carGroup);
+
+        // ============================================================
+        // 12. ATUALIZAÇÃO UNIFICADA DE TELEMETRIA, LEDS E RECEPTOR
+        // ============================================================
+        let pulsoLedTxTimer = 0;
+
+        function acionarPulsoLedESP32() {
+            pulsoLedTxTimer = 0.18;
+            espLedTxMat.color.setHex(0x00e676);
+            espLedTxMat.emissive.setHex(0x00e676);
+            espLedTxMat.emissiveIntensity = 2.2;
+        }
+
+        function atualizarEstadoSistema(valorDistancia, kwTransferido = 0) {
+            distance = Math.max(0.10, parseFloat(valorDistancia));
+            potenciaWPT = kwTransferido;
+
+            const distFormatada = distance.toFixed(2) + " m";
+            document.getElementById("dist-val").innerText = distFormatada;
+            document.getElementById("pill-dist-badge").innerText = distFormatada;
+            document.getElementById("wpt-transfer-status").innerText =
+                potenciaWPT > 0 ? potenciaWPT.toFixed(1) + " kW (Ativo)" : "0.0 kW (Standby)";
+
+            carGroup.position.z = POS_Z_PLATAFORMA + (distance - 0.45) * 1.1;
+            underCarLight.position.set(0, 0.015, carGroup.position.z);
+
+            if (modoCameraAtual === "acoplamento") {
+                controls.target.set(0, receptorEV.position.y - 0.02, carGroup.position.z);
+            }
+
+            const elDet = document.getElementById("det-val");
+            const elPos = document.getElementById("pos-val");
+            const elVal = document.getElementById("val-status");
+            const elStateTitle = document.getElementById("state-title");
+            const elStateMsg = document.getElementById("state-message");
+            const elStateBox = document.getElementById("state-box");
+            const elAlert = document.getElementById("alignment-alert");
+
+            if (distance > DIST_SAIDA_ZONA) {
+                notificacaoPosicaoEnviada = false;
+            }
+
+            if (distance <= DIST_ALINHADO) {
+                elDet.innerText = "SIM";
+                elDet.className = "status-pill pill-ok";
+
+                elPos.innerText = "SIM";
+                elPos.className = "status-pill pill-ok";
+
+                elVal.innerText = "VALIDADA";
+                elVal.className = "status-pill pill-ok";
+
+                elStateTitle.innerText = "VEÍCULO POSICIONADO • POSIÇÃO VALIDADA";
+                elStateTitle.style.color = "#00e676";
+                elStateMsg.innerText = potenciaWPT > 0
+                    ? `Transferência indutiva ativa (${potenciaWPT.toFixed(1)} kW) para o receptor WPT-RX.`
+                    : "Aguardando Processo Físico de Carregamento.";
+                elStateBox.style.borderColor = "rgba(0, 230, 118, 0.5)";
+
+                elAlert.innerText = "✅ Veículo corretamente alinhado com o módulo receptor.";
+                elAlert.style.background = "rgba(0, 230, 118, 0.18)";
+                elAlert.style.borderColor = "rgba(0, 230, 118, 0.55)";
+                elAlert.style.color = "#00e676";
+
+                atualizarLEDsModuloIndutor(true, 0x00e676, "#00e676");
+                atualizarDisplayTotem(
+                    potenciaWPT > 0 ? "WPT: " + potenciaWPT.toFixed(1) + " kW" : "POSICAO VALIDADA",
+                    "DIST: " + distance.toFixed(2) + "m",
+                    "#00a8ff"
+                );
+
+                if (!notificacaoPosicaoEnviada) {
+                    notificacaoPosicaoEnviada = true;
+                    exibirNotificacao({
+                        titulo: "Posicionamento Confirmado",
+                        subtitulo: "Veículo alinhado com a base transmissora.",
+                        descricao: "Acoplamento magnético habilitado com o receptor WPT-RX.",
+                        tipo: "success",
+                        icone: "✓",
+                        duracao: 4600
+                    });
+                }
+
+            } else if (distance <= DIST_DETECCAO) {
+                elDet.innerText = "SIM";
+                elDet.className = "status-pill pill-ok";
+
+                elPos.innerText = "NÃO";
+                elPos.className = "status-pill pill-warn";
+
+                elVal.innerText = "PENDENTE";
+                elVal.className = "status-pill pill-warn";
+
+                elStateTitle.innerText = "VEÍCULO DETECTADO";
+                elStateTitle.style.color = "#ffbb00";
+                elStateMsg.innerText = "Veículo detectado pelo sensor HC-SR04. Alinhando receptor.";
+                elStateBox.style.borderColor = "rgba(255, 187, 0, 0.5)";
+
+                elAlert.innerText = "⚠ Ajuste o posicionamento do veículo.";
+                elAlert.style.background = "rgba(255, 187, 0, 0.18)";
+                elAlert.style.borderColor = "rgba(255, 187, 0, 0.55)";
+                elAlert.style.color = "#ffbb00";
+
+                atualizarLEDsModuloIndutor(false, 0xffbb00, "#ffbb00");
+                atualizarDisplayTotem("VEICULO DETECTADO", "DIST: " + distance.toFixed(2) + "m", "#ffbb00");
+
+            } else {
+                elDet.innerText = "NÃO";
+                elDet.className = "status-pill pill-off";
+
+                elPos.innerText = "NÃO";
+                elPos.className = "status-pill pill-off";
+
+                elVal.innerText = "PENDENTE";
+                elVal.className = "status-pill pill-off";
+
+                elStateTitle.innerText = "AGUARDANDO POSICIONAMENTO";
+                elStateTitle.style.color = "#ff4d4d";
+                elStateMsg.innerText = "Aproxime o veículo da área de carregamento.";
+                elStateBox.style.borderColor = "rgba(255, 77, 77, 0.45)";
+
+                elAlert.innerText = "⚠ Ajuste o posicionamento do veículo.";
+                elAlert.style.background = "rgba(255, 77, 77, 0.18)";
+                elAlert.style.borderColor = "rgba(255, 77, 77, 0.5)";
+                elAlert.style.color = "#ff8080";
+
+                atualizarLEDsModuloIndutor(false, 0xff4d4d, "#ff4d4d");
+                atualizarDisplayTotem("AGUARDANDO EV", "DIST: " + distance.toFixed(2) + "m", "#ff4d4d");
+            }
+        }
+
+        // ============================================================
+        // 13. CONEXÃO MQTT (SUPORTE PARA DEMO E PLACA ESP32-S3 FÍSICA)
+        // ============================================================
+        const mqttClient = mqtt.connect(MQTT_BROKER_WSS);
+
+        mqttClient.on("connect", () => {
+            mqttClient.subscribe(TOPIC_DIST);
+            mqttClient.subscribe(TOPIC_STATUS);
+            if (usarPlacaFisica) {
+                document.getElementById("mqtt-status").innerText = "Conectado";
+                document.getElementById("mqtt-status").className = "status-pill pill-ok";
+            }
+        });
+
+        mqttClient.on("message", (topic, message) => {
+            const payload = message.toString().trim();
+            if (topic === TOPIC_STATUS || topic === TOPIC_DIST) {
+                ultimoPacoteEspMs = performance.now();
+                if (!espFisicoOnline) {
+                    espFisicoOnline = true;
+                    if (usarPlacaFisica) {
+                        exibirNotificacao({
+                            titulo: "Placa ESP32-S3 Física Conectada",
+                            subtitulo: "Recebendo telemetria real via MQTT.",
+                            descricao: "Sensor HC-SR04 físico ativo.",
+                            tipo: "success",
+                            icone: "⚡"
+                        });
+                    }
+                }
+            }
+            if (usarPlacaFisica && topic === TOPIC_DIST) {
+                const d = parseFloat(payload);
+                if (!isNaN(d)) {
+                    acionarPulsoLedESP32();
+                    atualizarEstadoSistema(d, d <= DIST_ALINHADO ? 7.2 : 0.0);
+                }
+            }
+        });
+
+        function alternarFonteDados() {
+            usarPlacaFisica = !usarPlacaFisica;
+            const btn = document.getElementById("btn-fonte-dados");
+            const badge = document.getElementById("badge-modo-painel");
+
+            if (usarPlacaFisica) {
+                btn.innerText = "Fonte: ESP32 Físico";
+                btn.classList.add("esp-sync-active");
+                badge.innerText = "ESP32-S3 FÍSICO";
+                document.getElementById("dir-step-label").innerText = "MODO SINCRONIZADO • PLACA ESP32-S3 FÍSICA";
+                document.getElementById("dir-step-desc").innerText = "Aguardando leituras reais do sensor HC-SR04 via broker HiveMQ...";
+                exibirNotificacao({
+                    titulo: "Modo Placa Física Ativado",
+                    subtitulo: "Escutando tópicos MQTT da ESP32-S3.",
+                    descricao: "Clique novamente em 'Fonte' para voltar ao ciclo automático.",
+                    tipo: "info",
+                    icone: "⇄"
+                });
+            } else {
+                btn.innerText = "Fonte: Auto";
+                btn.classList.remove("esp-sync-active");
+                badge.innerText = "AUTO COMPLETA";
+                reiniciarCicloDemo();
+            }
+        }
+
+        // ============================================================
+        // 14. MOTOR DA SIMULAÇÃO AUTOMÁTICA COMPLETA (CICLO DE 28s)
+        // ============================================================
+        const DURACAO_CICLO = 28.0;
+        let tempoCiclo = 0;
+        let pausado = false;
+        let flagsCiclo = { mqtt: false, esp: false };
+        let acumuladorPulsoTelemetry = 0;
+
+        const tourCamPos = new THREE.Vector3(10.2, 5.8, 12.2);
+        const tourCamTarget = new THREE.Vector3(0, 1.1, 1.8);
+
+        function alternarPausaDemo() {
+            pausado = !pausado;
+            document.getElementById("btn-pause-demo").innerText = pausado ? "Continuar" : "Pausar";
+        }
+
+        function reiniciarCicloDemo() {
+            tempoCiclo = 0;
+            flagsCiclo = { mqtt: false, esp: false };
+            notificacaoPosicaoEnviada = false;
+            espLedWifiMat.emissiveIntensity = 0.0;
+            document.getElementById("mqtt-status").innerText = "Conectando...";
+            document.getElementById("mqtt-status").className = "status-pill pill-warn";
+            document.getElementById("esp-status").innerText = "Aguardando Sinal";
+            document.getElementById("esp-status").className = "status-pill pill-off";
+            atualizarEstadoSistema(3.50, 0.0);
+        }
+
+        function executarEtapaAutomatica(t, dt) {
+            document.getElementById("director-progress-fill").style.width = ((t / DURACAO_CICLO) * 100).toFixed(1) + "%";
+
+            acumuladorPulsoTelemetry += dt;
+            if (acumuladorPulsoTelemetry >= 0.45 && flagsCiclo.esp) {
+                acumuladorPulsoTelemetry = 0;
+                acionarPulsoLedESP32();
+            }
+
+            let distSim = 3.50;
+            let kwSim = 0.0;
+
+            if (t < 4.5) {
+                document.getElementById("dir-step-label").innerText = "ETAPA 1 DE 5 • CONEXÃO MQTT & PLACA ESP32-S3";
+                document.getElementById("dir-step-desc").innerText = "Conectando broker MQTT e inicializando microcontrolador ESP32-S3 no totem...";
+                distSim = 3.50;
+                tourCamPos.set(9.8, 5.4, 11.8);
+                tourCamTarget.set(0, 1.2, 1.5);
+
+                if (t > 1.1 && !flagsCiclo.mqtt) {
+                    flagsCiclo.mqtt = true;
+                    document.getElementById("mqtt-status").innerText = "Conectado";
+                    document.getElementById("mqtt-status").className = "status-pill pill-ok";
+                    exibirNotificacao({
+                        titulo: "Broker MQTT Conectado",
+                        subtitulo: "Canal de telemetria estabelecido.",
+                        descricao: "Aguardando resposta do microcontrolador ESP32-S3.",
+                        tipo: "info",
+                        icone: "⇄",
+                        duracao: 3600
+                    });
+                }
+
+                if (t > 2.5 && !flagsCiclo.esp) {
+                    flagsCiclo.esp = true;
+                    document.getElementById("esp-status").innerText = "Online";
+                    document.getElementById("esp-status").className = "status-pill pill-ok";
+                    espLedWifiMat.color.setHex(0x00f2ff);
+                    espLedWifiMat.emissive.setHex(0x00f2ff);
+                    espLedWifiMat.emissiveIntensity = 1.9;
+                    exibirNotificacao({
+                        titulo: "Placa ESP32-S3 Conectada",
+                        subtitulo: "Comunicação ativa com o sensor HC-SR04.",
+                        descricao: "Recebendo leituras ultrassônicas em tempo real.",
+                        tipo: "success",
+                        icone: "⚡",
+                        duracao: 4200
+                    });
+                }
+
+            } else if (t < 10.5) {
+                const p = (t - 4.5) / 6.0;
+                distSim = 3.50 - p * (3.50 - 1.15);
+                document.getElementById("dir-step-label").innerText = "ETAPA 2 DE 5 • APROXIMAÇÃO & DETECÇÃO HC-SR04";
+                document.getElementById("dir-step-desc").innerText = "Veículo entra na zona de detecção (≤ 2,50 m) e avança em direção à plataforma.";
+                tourCamPos.set(6.4, 3.2, 8.6);
+                tourCamTarget.set(0, 0.85, 2.0);
+
+            } else if (t < 16.0) {
+                const p = (t - 10.5) / 5.5;
+                distSim = 1.15 - p * (1.15 - 0.45);
+                document.getElementById("dir-step-label").innerText = "ETAPA 3 DE 5 • ALINHAMENTO DO RECEPTOR INFERIOR (WPT-RX)";
+                document.getElementById("dir-step-desc").innerText = "Inspeção inferior: receptor WPT-RX sob o veículo alinhando-se com a bobina emissora.";
+                tourCamPos.set(1.38, 0.08, carGroup.position.z + 0.52);
+                tourCamTarget.set(0, receptorEV.position.y - 0.01, carGroup.position.z);
+
+            } else if (t < 23.5) {
+                const p = (t - 16.0) / 7.5;
+                distSim = 0.45;
+                kwSim = Math.min(7.2, p * 16.0);
+                document.getElementById("dir-step-label").innerText = "ETAPA 4 DE 5 • POSIÇÃO VALIDADA & INDUÇÃO ATIVA (LED AZUL)";
+                document.getElementById("dir-step-desc").innerText = "Alinhamento confirmado (≤ 0,48 m)! LED Azul aceso e fluxo magnético transferindo energia.";
+                if (p < 0.45) {
+                    tourCamPos.set(1.48, 0.12, 2.65);
+                    tourCamTarget.set(0, 0.06, 2.0);
+                } else {
+                    tourCamPos.set(5.2, 2.8, 7.2);
+                    tourCamTarget.set(0, 0.8, 1.4);
+                }
+
+            } else {
+                const p = (t - 23.5) / 4.5;
+                distSim = 0.45 + p * (3.50 - 0.45);
+                kwSim = 0.0;
+                document.getElementById("dir-step-label").innerText = "ETAPA 5 DE 5 • CONCLUSÃO & LIBERAÇÃO DA VAGA";
+                document.getElementById("dir-step-desc").innerText = "Ciclo concluído. Veículo deixa a estação e sistema reinicia automaticamente.";
+                tourCamPos.set(10.2, 5.8, 12.2);
+                tourCamTarget.set(0, 1.1, 1.8);
+            }
+
+            atualizarEstadoSistema(distSim, kwSim);
+        }
+
+        // ============================================================
+        // 15. PRESETS DE CÂMERA DO MENU FLUTUANTE
+        // ============================================================
+        function definirCamera(modo) {
+            modoCameraAtual = modo;
+            document.querySelectorAll(".cam-option-btn").forEach((b) => b.classList.remove("active-cam"));
+
+            if (modo === "tour") {
+                document.getElementById("btn-cam-tour").classList.add("active-cam");
+            } else if (modo === "acoplamento") {
+                document.getElementById("btn-cam-acoplamento").classList.add("active-cam");
+                camera.position.set(1.35, 0.08, carGroup.position.z + 0.55);
+                controls.target.set(0, receptorEV.position.y - 0.01, carGroup.position.z);
+            } else if (modo === "sensor") {
+                document.getElementById("btn-cam-sensor").classList.add("active-cam");
+                camera.position.set(0.18, 0.84, -0.35);
+                controls.target.set(0, 0.78, -0.83);
+            } else if (modo === "esp32") {
+                document.getElementById("btn-cam-esp32").classList.add("active-cam");
+                camera.position.set(0.16, 1.50, -0.22);
+                controls.target.set(0, 1.48, -0.83);
+            } else if (modo === "poste") {
+                document.getElementById("btn-cam-poste").classList.add("active-cam");
+                camera.position.set(3.2, 5.4, 8.8);
+                controls.target.set(-7.5, 4.4, -1.2);
+            } else {
+                document.getElementById("btn-cam-geral").classList.add("active-cam");
+                camera.position.set(10.2, 5.8, 12.2);
+                controls.target.set(0, 1.1, 1.8);
+            }
+        }
+
+        atualizarEstadoSistema(3.50, 0.0);
+
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const dt = clock.getDelta();
+
+            if (pulsoLedTxTimer > 0) {
+                pulsoLedTxTimer -= dt;
+                if (pulsoLedTxTimer <= 0) {
+                    espLedTxMat.color.setHex(0x0f3b26);
+                    espLedTxMat.emissive.setHex(0x000000);
+                    espLedTxMat.emissiveIntensity = 0.0;
+                }
+            }
+
+            if (!usarPlacaFisica) {
+                if (!pausado) {
+                    tempoCiclo += dt;
+                    if (tempoCiclo >= DURACAO_CICLO) {
+                        reiniciarCicloDemo();
+                    }
+                    executarEtapaAutomatica(tempoCiclo, dt);
+
+                    if (modoCameraAtual === "tour") {
+                        camera.position.lerp(tourCamPos, Math.min(1, dt * 2.4));
+                        controls.target.lerp(tourCamTarget, Math.min(1, dt * 2.8));
+                    }
+                }
+            } else {
+                const ativoAgora = (performance.now() - ultimoPacoteEspMs) < 10000;
+                const elEsp = document.getElementById("esp-status");
+                if (ativoAgora) {
+                    elEsp.innerText = "Online (Físico)";
+                    elEsp.className = "status-pill pill-ok";
+                    espLedWifiMat.color.setHex(0x00f2ff);
+                    espLedWifiMat.emissive.setHex(0x00f2ff);
+                    espLedWifiMat.emissiveIntensity = 1.9;
+                } else {
+                    elEsp.innerText = "Aguardando Sinal";
+                    elEsp.className = "status-pill pill-off";
+                    espLedWifiMat.emissiveIntensity = 0.0;
+                }
+            }
+
+            const alcanceVisual = Math.min(2.6, Math.max(0.45, distance));
+            ondasUltrassonicas.forEach((o) => {
+                o.fase = (o.fase + dt * 0.9) % 1;
+                o.mesh.position.z = 0.48 + o.fase * alcanceVisual;
+                const esc = 1 + o.fase * 2.4;
+                o.mesh.scale.set(esc, esc, 1);
+                o.mesh.material.opacity = (1 - o.fase) * 0.42;
+            });
+
+            aneisFluxoWPT.forEach((a) => {
+                if (indutorConectado) {
+                    a.fase = (a.fase + dt * 1.15) % 1;
+                    a.mesh.position.y = 0.03 + a.fase * 0.11;
+                    const esc = 0.85 + a.fase * 0.35;
+                    a.mesh.scale.set(esc, esc, 1);
+                    a.mesh.material.opacity = Math.sin(a.fase * Math.PI) * 0.72;
+                } else {
+                    a.mesh.material.opacity = 0;
+                }
+            });
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        window.addEventListener("resize", () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
